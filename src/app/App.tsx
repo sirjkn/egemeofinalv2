@@ -62,7 +62,8 @@ type PreviewRole = "admin" | "shareholder" | "client";
 
 const ProfileCtx = createContext<UserProfile | null>(null);
 function useProfile() { return useContext(ProfileCtx); }
-function useIsViewOnly() { const p = useProfile(); return !!p && p.role !== "admin" && p.role !== "reception"; }
+function useIsViewOnly() { const p = useProfile(); return !!p && p.role !== "admin"; }
+function useCanMakePayment() { const p = useProfile(); return !!p && (p.role === "admin" || p.role === "reception"); }
 
 // When an admin changes a member's phone number, sync the Supabase Auth email so
 // the member can immediately log in with the new number.
@@ -5031,8 +5032,9 @@ function MpesaTransactionsPage() {
 // ─── Payments Page ────────────────────────────────────────────────────────────
 
 function PaymentsPage() {
-  const profile  = useProfile();
-  const viewOnly = useIsViewOnly();
+  const profile       = useProfile();
+  const viewOnly      = useIsViewOnly();
+  const canAddPayment = useCanMakePayment();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -5119,7 +5121,7 @@ function PaymentsPage() {
               style={{ background: "rgba(255,255,255,0.85)" }}>
               <FileDown size={13} /> PDF
             </button>
-            {!viewOnly && <button onClick={() => setShowAdd(true)}
+            {canAddPayment && <button onClick={() => setShowAdd(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold hover:opacity-90"
               style={{ background: "#fff", color: "#0d9488" }}>
               <Plus size={13} /> Add Payment
