@@ -6050,7 +6050,7 @@ function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-bold" style={{ color: card.color }}>{card.label}</div>
-                <div className="text-xs text-gray-400 mt-0.5 truncate">{card.sub}</div>
+                <div className="text-xs mt-0.5 truncate text-[#303235]">{card.sub}</div>
               </div>
               <ChevronRight size={15} className="text-gray-300 flex-shrink-0 group-hover:text-gray-400 transition-colors" />
             </button>
