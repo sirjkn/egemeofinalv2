@@ -3918,7 +3918,8 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
 function DashboardPage({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const profile = useProfile();
-  if (!profile || profile.role === "admin" || profile.role === "reception") return <AdminDashboard onNavigate={onNavigate} />;
+  if (!profile) return null;
+  if (profile.role === "admin" || profile.role === "reception") return <AdminDashboard onNavigate={onNavigate} />;
   return <MemberDashboard onNavigate={onNavigate} />;
 }
 
@@ -5672,19 +5673,21 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
           {/* M-Pesa */}
           {method === "mpesa" && (
             <div>
-              {/* STK / Manual sub-tabs */}
-              <div className="flex rounded-xl overflow-hidden border mb-3" style={{ borderColor: "var(--border)" }}>
-                <button onClick={() => { setMpesaMode("stk"); setErr(""); resetStk(); }}
-                  className="flex-1 py-2 text-xs font-bold transition-colors"
-                  style={{ background: mpesaMode === "stk" ? "#16a34a" : "#f9fafb", color: mpesaMode === "stk" ? "#fff" : "#64748b" }}>
-                  📱 STK Push
-                </button>
-                <button onClick={() => { setMpesaMode("manual"); setErr(""); }}
-                  className="flex-1 py-2 text-xs font-bold transition-colors"
-                  style={{ background: mpesaMode === "manual" ? "#16a34a" : "#f9fafb", color: mpesaMode === "manual" ? "#fff" : "#64748b" }}>
-                  ✍️ Manual Code
-                </button>
-              </div>
+              {/* STK / Manual sub-tabs — Manual Code only for admin */}
+              {isAdmin && (
+                <div className="flex rounded-xl overflow-hidden border mb-3" style={{ borderColor: "var(--border)" }}>
+                  <button onClick={() => { setMpesaMode("stk"); setErr(""); resetStk(); }}
+                    className="flex-1 py-2 text-xs font-bold transition-colors"
+                    style={{ background: mpesaMode === "stk" ? "#16a34a" : "#f9fafb", color: mpesaMode === "stk" ? "#fff" : "#64748b" }}>
+                    📱 STK Push
+                  </button>
+                  <button onClick={() => { setMpesaMode("manual"); setErr(""); }}
+                    className="flex-1 py-2 text-xs font-bold transition-colors"
+                    style={{ background: mpesaMode === "manual" ? "#16a34a" : "#f9fafb", color: mpesaMode === "manual" ? "#fff" : "#64748b" }}>
+                    ✍️ Manual Code
+                  </button>
+                </div>
+              )}
 
               {/* STK Push */}
               {mpesaMode === "stk" && (
@@ -5780,8 +5783,8 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
                 </div>
               )}
 
-              {/* Manual Code */}
-              {mpesaMode === "manual" && (
+              {/* Manual Code — admin only */}
+              {isAdmin && mpesaMode === "manual" && (
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs font-semibold text-gray-500 mb-1 block">M-Pesa Transaction Code</label>
@@ -7391,8 +7394,17 @@ export default function App() {
     return <LoginPage onLoggedIn={handleLoggedIn} />;
   }
 
+  // Session exists but profile is still loading — show spinner to prevent admin flash
+  if (!profile) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-white">
+        <Loader2 size={28} className="animate-spin" style={{ color: "#cbd5e1" }} />
+      </div>
+    );
+  }
+
   // Logged in but must change password first
-  if (profile && !profile.password_changed) {
+  if (!profile.password_changed) {
     return <SetPasswordPage profile={profile} onComplete={handlePasswordSet} />;
   }
 

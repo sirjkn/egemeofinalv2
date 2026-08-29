@@ -597,18 +597,20 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
               {/* M-Pesa with STK push */}
               {method === "mpesa" && (
                 <div>
-                  <div className="flex rounded-xl overflow-hidden border mb-3" style={{ borderColor: "var(--border)" }}>
-                    <button onClick={() => { setMpesaMode("stk"); setErr(""); resetStk(); }}
-                      className="flex-1 py-2 text-xs font-bold transition-colors"
-                      style={{ background: mpesaMode === "stk" ? "#16a34a" : "#f9fafb", color: mpesaMode === "stk" ? "#fff" : "#64748b" }}>
-                      📱 STK Push
-                    </button>
-                    <button onClick={() => { setMpesaMode("manual"); setErr(""); }}
-                      className="flex-1 py-2 text-xs font-bold transition-colors"
-                      style={{ background: mpesaMode === "manual" ? "#16a34a" : "#f9fafb", color: mpesaMode === "manual" ? "#fff" : "#64748b" }}>
-                      ✍️ Manual Code
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="flex rounded-xl overflow-hidden border mb-3" style={{ borderColor: "var(--border)" }}>
+                      <button onClick={() => { setMpesaMode("stk"); setErr(""); resetStk(); }}
+                        className="flex-1 py-2 text-xs font-bold transition-colors"
+                        style={{ background: mpesaMode === "stk" ? "#16a34a" : "#f9fafb", color: mpesaMode === "stk" ? "#fff" : "#64748b" }}>
+                        📱 STK Push
+                      </button>
+                      <button onClick={() => { setMpesaMode("manual"); setErr(""); }}
+                        className="flex-1 py-2 text-xs font-bold transition-colors"
+                        style={{ background: mpesaMode === "manual" ? "#16a34a" : "#f9fafb", color: mpesaMode === "manual" ? "#fff" : "#64748b" }}>
+                        ✍️ Manual Code
+                      </button>
+                    </div>
+                  )}
 
                   {mpesaMode === "stk" && (
                     <div className="space-y-3">
@@ -692,7 +694,7 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
                     </div>
                   )}
 
-                  {mpesaMode === "manual" && (
+                  {isAdmin && mpesaMode === "manual" && (
                     <div className="space-y-3">
                       <input type="text" value={manualRef} onChange={(e) => setManualRef(e.target.value.toUpperCase())}
                         placeholder="M-Pesa code e.g. QHX4XXXXXXX"
