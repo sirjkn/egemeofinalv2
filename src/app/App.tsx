@@ -681,14 +681,14 @@ function ShareholderContributionsAccordion({ shareholder, onChanged }: {
                           className="p-1 rounded hover:bg-indigo-50 text-indigo-300 hover:text-indigo-600 transition-colors">
                           <Eye size={12} />
                         </button>
-                        <button onClick={() => setEditC(c)} title="Edit"
+                        {isAdmin && <button onClick={() => setEditC(c)} title="Edit"
                           className="p-1 rounded hover:bg-amber-50 text-amber-300 hover:text-amber-600 transition-colors">
                           <Edit2 size={12} />
-                        </button>
-                        <button onClick={() => setDeleteC(c)} title="Delete"
+                        </button>}
+                        {isAdmin && <button onClick={() => setDeleteC(c)} title="Delete"
                           className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors">
                           <Trash2 size={12} />
-                        </button>
+                        </button>}
                       </div>
                     </td>
                   </tr>
@@ -789,14 +789,14 @@ function ShareholderContributionsAccordion({ shareholder, onChanged }: {
                             className="p-1 rounded hover:bg-indigo-50 text-indigo-300 hover:text-indigo-600 transition-colors">
                             <Eye size={12} />
                           </button>
-                          <button onClick={() => { setViewMulti(null); setEditC(c); }} title="Edit"
+                          {isAdmin && <button onClick={() => { setViewMulti(null); setEditC(c); }} title="Edit"
                             className="p-1 rounded hover:bg-amber-50 text-amber-300 hover:text-amber-600 transition-colors">
                             <Edit2 size={12} />
-                          </button>
-                          <button onClick={() => { setViewMulti(null); setDeleteC(c); }} title="Delete"
+                          </button>}
+                          {isAdmin && <button onClick={() => { setViewMulti(null); setDeleteC(c); }} title="Delete"
                             className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors">
                             <Trash2 size={12} />
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
@@ -1412,6 +1412,8 @@ function PlotCsvUploadModal({ plot, memberName, onClose, onDone }: {
 
 function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone }: { memberId: number; memberType: "shareholder" | "client"; memberName: string; memberPhone?: string }) {
   const navigate = useNavigate();
+  const _profile = useProfile();
+  const _isAdmin = _profile?.role === "admin";
   const [plots, setPlots] = useState<(Plot & { project?: Project })[]>([]);
   const [loading, setLoading] = useState(true);
   const [payTarget, setPayTarget] = useState<(Plot & { project?: Project }) | null>(null);
@@ -1500,7 +1502,7 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
         ) : (
           <div className="space-y-3 pt-1">
             {plots.map((p) => (
-              <AssignedPlotCard key={p.id} plot={p} isAdmin={true}
+              <AssignedPlotCard key={p.id} plot={p} isAdmin={_isAdmin}
                 onPay={() => { setPayTarget(p); setPayStep("amount"); }}
                 onUpload={() => setUploadTarget(p)}
                 onRemove={() => plotsApi.unassign(p.id).then(reload)}
@@ -1963,10 +1965,14 @@ function ShareholdersPage() {
   };
 
   const moreActions = (m: Shareholder) => [
-    { label: "Make Plot Payment", icon: <MapPin size={13} />,    color: "#22c55e", onClick: () => {} },
-    { label: "Assign Plot",       icon: <MapPin size={13} />,    color: "#f97316", onClick: () => {} },
+    ...(viewOnly ? [] : [
+      { label: "Make Plot Payment", icon: <MapPin size={13} />,    color: "#22c55e", onClick: () => {} },
+      { label: "Assign Plot",       icon: <MapPin size={13} />,    color: "#f97316", onClick: () => {} },
+    ]),
     { label: "Password Reminder", icon: <KeyRound size={13} />,  color: "#64748b", onClick: () => handlePasswordReminder(m) },
-    { label: "Delete Member",     icon: <Trash2 size={13} />,    color: "#ef4444", onClick: () => setDeleteTarget(m) },
+    ...(viewOnly ? [] : [
+      { label: "Delete Member",     icon: <Trash2 size={13} />,    color: "#ef4444", onClick: () => setDeleteTarget(m) },
+    ]),
   ];
 
   const renderDetail = (m: Shareholder) => (
@@ -2023,9 +2029,9 @@ function ShareholdersPage() {
               <span className={`flex items-center gap-1 text-xs font-semibold ${m.status === "Active" ? "text-green-600" : "text-gray-400"}`}>
                 <CheckCircle2 size={12} /> {m.status}
               </span>
-              <button onClick={() => toggleStatus(m)} className="text-xs text-gray-400 hover:text-gray-600 underline">
+              {!viewOnly && <button onClick={() => toggleStatus(m)} className="text-xs text-gray-400 hover:text-gray-600 underline">
                 Mark {m.status === "Active" ? "Inactive" : "Active"}
-              </button>
+              </button>}
             </div>
           </div>
         </div>
@@ -2319,9 +2325,9 @@ function ClientsPage() {
               <span className={`flex items-center gap-1 text-xs font-semibold ${m.status === "Active" ? "text-green-600" : "text-gray-400"}`}>
                 <CheckCircle2 size={12} /> {m.status}
               </span>
-              <button onClick={() => toggleStatus(m)} className="text-xs text-gray-400 hover:text-gray-600 underline">
+              {!viewOnly && <button onClick={() => toggleStatus(m)} className="text-xs text-gray-400 hover:text-gray-600 underline">
                 Mark {m.status === "Active" ? "Inactive" : "Active"}
-              </button>
+              </button>}
             </div>
           </div>
         </div>

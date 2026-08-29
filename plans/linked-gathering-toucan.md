@@ -1,85 +1,93 @@
-# Admin Password Reset via Supabase Edge Function
+# Two Bug Fixes: Login Flash + Manual Mpesa Visibility
 
 ## Context
 
-The previous "Reveal Member Password" card is being removed because **Supabase passwords cannot be read** — they are stored as one-way bcrypt hashes and there is no API to retrieve them.
+Two unrelated bugs reported by the user:
 
-The correct admin capability is **resetting** a member's password to a known temporary value, then notifying the member via SMS. Since the app runs in Figma Make (no deployed Node.js server), the reset must go through a Supabase Edge Function — which has server-side access to `SUPABASE_SERVICE_ROLE_KEY` and the Auth Admin API (`supabase.auth.admin.updateUserById`).
+1. **Login flash**: After logging in as shareholder/client/receptionist, the admin dashboard is briefly shown for ~3 seconds before the correct member dashboard appears. This is a race condition — the session is set synchronously but the profile is fetched asynchronously, so there's a window where `profile === null` and `DashboardPage` treats null as "admin".
+
+2. **Manual Mpesa for non-admins**: The "✍️ Manual Code" sub-tab inside the M-Pesa payment section is visible to co-owners and other non-admin users when making plot payments. It should only appear for admin.
 
 ---
 
-## Changes
+## Fix 1 — Login Flash (`src/app/App.tsx`)
 
-### 1. New Edge Function — `supabase/functions/admin-reset-password/index.ts`
-
-Follow the exact pattern used in `mpesa-stk/index.ts` and `sms-reminder/index.ts`:
-
+### Root cause
+`onAuthStateChange` calls `setSession(s)` synchronously, then begins an async `fetchProfile()`. During that async gap, `profile === null` and `DashboardPage` renders `AdminDashboard` because of:
 ```ts
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const supabase = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-);
-
-Deno.serve(async (req) => {
-  const { userId, newPassword } = await req.json();
-  if (!userId || !newPassword || newPassword.length < 6)
-    return new Response(JSON.stringify({ success: false, error: "userId and newPassword (min 6 chars) required" }), { status: 400, headers: { "Content-Type": "application/json" } });
-
-  const { error } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
-  if (error)
-    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 400, headers: { "Content-Type": "application/json" } });
-
-  // Clear flag so member is prompted to change password on next login
-  await supabase.from("user_profiles").update({ password_changed: false }).eq("id", userId);
-
-  return new Response(JSON.stringify({ success: true }), { status: 200, headers: { "Content-Type": "application/json" } });
-});
+if (!profile || profile.role === "admin" || profile.role === "reception") return <AdminDashboard />;
 ```
 
-### 2. Replace old card in `src/app/pages/SettingsPage.tsx`
+### Changes
 
-**Remove** the entire `RevealMemberPasswordCard` function and its `UserProfileRow` interface.
+**A. `App()` component — add a loading guard (~line 7399)**
 
-**Add `AdminPasswordResetCard`** — a clean single-purpose card.
+The `App()` function already has `authReady` and `session` state. Add a check:
+```ts
+// session exists but profile not yet loaded — show loading spinner
+if (authReady && session && !profile) {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-white">
+      <Loader2 size={28} className="animate-spin text-gray-300" />
+    </div>
+  );
+}
+```
+Place this **after** the `if (!authReady)` splash guard and **before** the `if (profile && !profile.password_changed)` password-change check.
 
-**State:**
-- `users` — loaded from `user_profiles` (id, full_name, email, role, member_id) on mount
-- `selected` + `phone` — picked member + their phone from `shareholders`/`clients`/`investors`
-- `password` — temp password; auto-generates 6-digit OTP when a member is picked
-- `showPw`, `editPhone`, `resetting`, `smsSending`, `msg`
+**B. `DashboardPage` — harden null profile handling (~line 3919)**
 
-**Actions:**
-- **Refresh icon** next to password field → regenerate OTP: `Math.floor(100000 + Math.random() * 900000).toString()`
-- **Reset Password** button → `supabase.functions.invoke("admin-reset-password", { body: { userId: selected.id, newPassword: password } })`
-- **Reset & Send SMS** button → reset first, then `sendSms(phone, message)` with the temp password
-  - Message: `Hi [FirstName], your SACCO password has been reset. Temp password: [otp]. Login with your phone number and change it after login.`
-
-**No server URL field** — the Edge Function call goes through the existing `supabase` client automatically.
-
-**Wire into tools tab** — replace `<RevealMemberPasswordCard />` with `<AdminPasswordResetCard />`.
+Change:
+```ts
+if (!profile || profile.role === "admin" || profile.role === "reception") return <AdminDashboard />;
+```
+To:
+```ts
+if (!profile) return null;  // still loading — App() spinner covers this
+if (profile.role === "admin" || profile.role === "reception") return <AdminDashboard />;
+```
 
 ---
 
-## Reused utilities
-- `sendSms(phone, message)` — `src/lib/sms.ts`, already imported in SettingsPage
-- `supabase.functions.invoke()` — no new imports; `supabase` is already imported
-- Phone lookup: `supabase.from(table).select("phone").eq("id", member_id).maybeSingle()` — same pattern as deleted card
-- All icons (`KeyRound`, `RefreshCw`, `Eye`, `EyeOff`, `MessageSquare`, `CheckCircle`, `XCircle`, `Loader2`, `Search`, `X`, `Phone`, `Edit2`) — already imported
+## Fix 2 — Manual Mpesa tab (`src/app/pages/ProjectsPage.tsx` + `src/app/App.tsx`)
+
+### Two locations with the same pattern
+
+Both `PlotPaymentModal` (ProjectsPage.tsx ~line 606) and `PaymentModal` (App.tsx ~line 5682) render the STK Push / Manual Code sub-tab toggle unconditionally inside `{method === "mpesa" && ...}`. The Manual Code tab must be hidden for non-admin.
+
+**`PlotPaymentModal` in `ProjectsPage.tsx` (~line 606):**
+The component already has `isAdmin` prop. Wrap the "✍️ Manual Code" tab button and its content with `{isAdmin && ...}`. When `isAdmin` is false, skip rendering the tab toggle entirely (user only sees STK Push, no tab UI needed).
+
+Pattern:
+```tsx
+{method === "mpesa" && (
+  <div>
+    {isAdmin && (
+      <div className="flex rounded-xl overflow-hidden border mb-3">
+        <button ...>📱 STK Push</button>
+        <button ...>✍️ Manual Code</button>
+      </div>
+    )}
+    {/* STK Push content always shown when method=mpesa */}
+    {(!isAdmin || mpesaTab === "stk") && <StkPushSection />}
+    {isAdmin && mpesaTab === "manual" && <ManualCodeSection />}
+  </div>
+)}
+```
+
+**`PaymentModal` in `App.tsx` (~line 5682):**
+The component already has `const isAdmin = profile?.role === "admin"`. Apply the same gate — wrap the tab toggle and manual code section with `{isAdmin && ...}`.
 
 ---
 
 ## Critical Files
-- `supabase/functions/admin-reset-password/index.ts` — **new file**
-- `src/app/pages/SettingsPage.tsx` — remove `RevealMemberPasswordCard` + `UserProfileRow`, add `AdminPasswordResetCard`, update tools tab reference
-
----
+- `src/app/App.tsx` — `App()` loading guard + `DashboardPage` null guard + `PaymentModal` manual mpesa gate
+- `src/app/pages/ProjectsPage.tsx` — `PlotPaymentModal` manual mpesa gate
 
 ## Verification
-1. App Maintenance → Data Tools → find the new "Admin Password Reset" card
-2. Search a member → 6-digit OTP auto-appears in password field
-3. Click Show → OTP visible in plain text; click Refresh to regenerate
-4. Click **Reset Password** → success message; member can now log in with the OTP
-5. Click **Reset & Send SMS** → same as above + member receives SMS with temp password
-6. Member logs in with OTP → prompted to set a new personal password (`password_changed = false`)
+1. Log in as a shareholder → no admin dashboard flash; member dashboard appears immediately
+2. Log in as a client → same
+3. Log in as receptionist → same  
+4. Admin logs in → admin dashboard still appears as before
+5. As a shareholder/client with a plot, click "Make Payment" → only STK Push option visible, no "Manual Code" tab
+6. As admin on a plot, click payment → both STK Push and Manual Code tabs are visible
