@@ -1554,7 +1554,7 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
           description={`Plot ${payTarget.plot_number}`}
           memberName={memberName}
           memberPhone={memberPhone}
-          accountRef={(payTarget.project?.project_name ? `[${payTarget.project.project_name}-Plot ${payTarget.plot_number}]` : `Plot ${payTarget.plot_number}`).slice(0, 12)}
+          accountRef={(payTarget.project?.project_name ? `${payTarget.project.project_name}/Plot ${payTarget.plot_number}` : `Plot ${payTarget.plot_number}`).slice(0, 12)}
           onClose={closePay}
           onComplete={async (method, ref, viaStk, phone) => {
             await handlePay(method, ref, viaStk, phone);
@@ -3831,7 +3831,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         description={`Plot ${plotPayTarget.plot_number}`}
         memberName={memberInfo?.name}
         memberPhone={profile.role === "shareholder" ? memberShareholder?.phone : undefined}
-        accountRef={(plotPayTarget.project?.project_name ? `[${plotPayTarget.project.project_name}-Plot ${plotPayTarget.plot_number}]` : `Plot ${plotPayTarget.plot_number}`).slice(0, 12)}
+        accountRef={(plotPayTarget.project?.project_name ? `${plotPayTarget.project.project_name}/Plot ${plotPayTarget.plot_number}` : `Plot ${plotPayTarget.plot_number}`).slice(0, 12)}
         onClose={closeAllPay}
         onComplete={handlePlotPayComplete}
       />

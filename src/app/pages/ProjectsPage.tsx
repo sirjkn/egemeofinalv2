@@ -412,8 +412,8 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
           action: "push",
           phone: stkPhone.trim(),
           amount: Math.round(parsedAmount),
-          accountRef: (projectName ? `[${projectName}-Plot ${plot.plot_number}]` : `Plot ${plot.plot_number}`).slice(0, 12),
-          description: (projectName ? `[${projectName} - Plot ${plot.plot_number}]` : `Plot ${plot.plot_number}`).slice(0, 50),
+          accountRef: (projectName ? `${projectName}/Plot ${plot.plot_number}` : `Plot ${plot.plot_number}`).slice(0, 12),
+          description: (projectName ? `${projectName}/Plot ${plot.plot_number}` : `Plot ${plot.plot_number}`).slice(0, 50),
         },
       });
       if (error) throw error;
