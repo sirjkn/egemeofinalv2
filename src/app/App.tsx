@@ -4247,7 +4247,7 @@ function MyPlotsPage() {
     {payPlot && (
       <PlotPaymentModal
         plot={payPlot}
-        projectName={payPlot.project?.name}
+        projectName={payPlot.project?.project_name}
         assignedName={profile.full_name}
         memberPhone={payPlot.member_phone ?? undefined}
         onClose={() => setPayPlot(null)}
