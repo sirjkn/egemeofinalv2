@@ -8,6 +8,7 @@ import {
   MessageSquare, Bell, Eye, EyeOff, Phone, Database, Settings2, Cloud, Trash2,
   Activity, Filter, LogIn, CreditCard as PayIcon, Edit2, Trash as TrashIcon,
   UserPlus, BarChart2, Map, RefreshCcw, BellRing, ShieldAlert, Camera, LayoutDashboard,
+  BookOpen, FileDown,
 } from "lucide-react";
 import {
   shareholdersApi, clientsApi, contributionsApi, checkDbHealth,
@@ -18,6 +19,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { fmtKES, fmtDate, MONTHS } from "@/app/shared";
 import { getCompanyDetails, saveCompanyDetails, type CompanyDetails } from "@/lib/company";
+import { downloadSystemGuidePdf } from "@/lib/pdf";
 import { getPaymentSettings, type PaymentSettings } from "@/lib/mpesa";
 import { loadPaymentSettingsFromDb, savePaymentSettingsToDb, loadSmsSettingsFromDb, saveSmsSettingsToDb } from "@/lib/settingsApi";
 import { getSmsSettings, saveSmsSettings, mergeSmsSettings, sendSms, SMS_TRIGGERS, DEFAULT_TEMPLATES, interpolate, type SmsSettings } from "@/lib/sms";
@@ -4038,6 +4040,44 @@ function DatabaseConnectionCard() {
   );
 }
 
+function SystemGuideCard() {
+  const [loading, setLoading] = useState(false);
+
+  const handleDownload = async () => {
+    setLoading(true);
+    try {
+      const co = await getCompanyDetails();
+      await downloadSystemGuidePdf(co);
+    } catch (e: any) {
+      console.error("Guide PDF error", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "#eef2ff" }}>
+            <BookOpen size={16} color="#4338ca" />
+          </div>
+          <div>
+            <p className="text-sm font-bold" style={{ color: "#1a202c" }}>System User Guide</p>
+            <p className="text-xs text-gray-400">All modules, menus, features &amp; role access — PDF reference</p>
+          </div>
+        </div>
+        <button onClick={handleDownload} disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white disabled:opacity-60 hover:opacity-90 transition-opacity"
+          style={{ background: "linear-gradient(135deg,#4338ca,#6366f1)" }}>
+          {loading ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
+          {loading ? "Generating…" : "Download Guide"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AppMaintenancePage({ onBack }: { onBack: () => void }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState("");
@@ -4204,6 +4244,9 @@ function AppMaintenancePage({ onBack }: { onBack: () => void }) {
             <button onClick={() => setResult(null)} className="ml-auto text-gray-400 hover:text-gray-600"><X size={14} /></button>
           </div>
         )}
+
+        {/* ── System Guide download — always visible ── */}
+        <SystemGuideCard />
 
         {/* ── System tab ── */}
         {activeTab === "system" && (

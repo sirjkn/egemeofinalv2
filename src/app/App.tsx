@@ -65,6 +65,15 @@ function useProfile() { return useContext(ProfileCtx); }
 function useIsViewOnly() { const p = useProfile(); return !!p && p.role !== "admin"; }
 function useCanMakePayment() { const p = useProfile(); return !!p && (p.role === "admin" || p.role === "reception"); }
 
+// Billing cycle: day 1–10 → previous month's contribution period; day 11+ → current month
+function getBillingPeriod(date: Date = new Date()): { month: number; year: number } {
+  if (date.getDate() <= 10) {
+    const prev = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+    return { month: prev.getMonth() + 1, year: prev.getFullYear() };
+  }
+  return { month: date.getMonth() + 1, year: date.getFullYear() };
+}
+
 // When an admin changes a member's phone number, sync the Supabase Auth email so
 // the member can immediately log in with the new number.
 async function syncAuthEmailOnPhoneChange(memberId: number, newPhone: string): Promise<void> {
@@ -2719,7 +2728,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
   useEffect(() => {
     (async () => {
-      const now = new Date(); const month = now.getMonth() + 1; const year = now.getFullYear();
+      const now = new Date(); const { month, year } = getBillingPeriod(now);
       const [shR, clR, invR, totR, monR, plotR, payR, contribAllR] = await Promise.all([
         supabase.from("shareholders").select("id", { count: "exact", head: true }),
         supabase.from("clients").select("id", { count: "exact", head: true }).eq("status", "Active"),
@@ -3188,7 +3197,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   useEffect(() => {
     if (!mid) return;
     (async () => {
-      const now = new Date(); const month = now.getMonth() + 1; const year = now.getFullYear();
+      const now = new Date(); const { month, year } = getBillingPeriod(now);
       const [mRes, plotRes, payRes] = await Promise.all([
         supabase.from(mtype + "s").select(isSH ? "name, member_number, net_savings, photo_url" : "name, member_number, photo_url").eq("id", mid).maybeSingle(),
         supabase.from("plots").select("id, plot_number, price, paid_amount, status").eq("assigned_to_id", mid).eq("assigned_to_type", mtype),
@@ -5875,11 +5884,12 @@ function RecordContributionModal({
   onSave: (c: Contribution) => void;
 }) {
   const today = new Date();
+  const billing = getBillingPeriod(today);
   const [form, setForm] = useState({
     shareholder_id: initial?.shareholder_id ?? (shareholders[0]?.id ?? 0),
     amount: "",
-    month: today.getMonth() + 1,
-    year: today.getFullYear(),
+    month: billing.month,
+    year: billing.year,
     payment_date: today.toISOString().slice(0, 10),
     notes: "",
   });
@@ -5893,17 +5903,17 @@ function RecordContributionModal({
   const selectedSh = shareholders.find((s) => s.id === form.shareholder_id);
   const amt = parseFloat(form.amount);
 
-  // Only allow the current month — no future months, no past months
-  const currentMonth = today.getMonth() + 1;
-  const currentYear  = today.getFullYear();
-  const availableMonths = form.year === currentYear
-    ? [{ label: MONTHS[currentMonth - 1], month: currentMonth }]
+  // Billing period month — day 1–10 maps to previous month, day 11+ to current month
+  const billingMonth = billing.month;
+  const billingYear  = billing.year;
+  const availableMonths = form.year === billingYear
+    ? [{ label: MONTHS[billingMonth - 1], month: billingMonth }]
     : [];
 
-  // When year changes, lock to current month if same year, else clear
+  // When year changes, lock to billing month if same year
   useEffect(() => {
-    if (form.year === currentYear) {
-      setForm((f) => ({ ...f, month: currentMonth }));
+    if (form.year === billingYear) {
+      setForm((f) => ({ ...f, month: billingMonth }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.year]);
