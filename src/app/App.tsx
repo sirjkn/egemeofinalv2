@@ -1442,16 +1442,16 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
 
   const closePay = () => { setPayTarget(null); setPayStep(null); setPlotAmount(""); };
 
-  const handlePay = async (method: PayMethod, ref?: string, viaStk?: boolean, phone?: string) => {
+  const handlePay = async (method: PayMethod, ref?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
     if (!payTarget) return;
     const amt = Math.min(parseFloat(plotAmount) || 0, Math.max(0, Number(payTarget.price) - Number(payTarget.paid_amount)));
     if (amt <= 0) return;
     const today = new Date().toISOString().slice(0, 10);
 
-    // Resolve actual payer name from Safaricom callback when using STK
-    let payerName = memberName;
+    // extras.paidBy overrides for manual; for STK try resolving from callback
+    let payerName = extras?.paidBy || memberName;
     let payerPhone = phone ?? memberPhone ?? "";
-    if (method === "mpesa" && ref) {
+    if (method === "mpesa" && ref && !extras) {
       try {
         const { data: cbRow } = await supabase
           .from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
@@ -1480,19 +1480,20 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
       phone: payerPhone,
       fine: "",
       status: "",
-      note: "",
+      note: extras?.comment ?? "",
     });
     await plotsApi.recordPayment(payTarget.id, amt, structuredNotes);
     logActivity({ category: "plot", action: "payment", description: `Plot ${payTarget.plot_number} payment of KES ${amt.toLocaleString()} recorded for ${payerName}`, actor_name: memberName, meta: { plot_id: payTarget.id, amount: amt } });
     if (method === "mpesa") {
+      const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payTarget.plot_number}`;
       await paymentsApi.create({
-        payment_id: viaStk ? ref : undefined,
+        payment_id: ref ?? undefined,
         date_paid: today,
         amount: amt,
         paid_by: payerName,
         purpose: "Plot Payment",
         mode: "Mpesa",
-        comment: `PHONE:${payerPhone}|ACCOUNT:${payTarget.plot_number}`,
+        comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
       });
     }
     reload();
@@ -1565,8 +1566,8 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
           memberPhone={memberPhone}
           accountRef={(payTarget.project?.project_name ? `${payTarget.project.project_name}/Plot ${payTarget.plot_number}` : `Plot ${payTarget.plot_number}`).slice(0, 12)}
           onClose={closePay}
-          onComplete={async (method, ref, viaStk, phone) => {
-            await handlePay(method, ref, viaStk, phone);
+          onComplete={async (method, ref, viaStk, phone, extras) => {
+            await handlePay(method, ref, viaStk, phone, extras);
             closePay();
           }}
         />
@@ -3174,19 +3175,20 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const plotDue = plotPayTarget ? Math.max(0, Number(plotPayTarget.price) - Number(plotPayTarget.paid_amount)) : 0;
   const parsedPlotAmt = Math.min(parseFloat(plotPayAmount) || 0, plotDue);
 
-  const handlePlotPayComplete = async (method: PayMethod, ref?: string, viaStk?: boolean, phone?: string) => {
+  const handlePlotPayComplete = async (method: PayMethod, ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
     if (!plotPayTarget) return;
     await plotsApi.recordPayment(plotPayTarget.id, parsedPlotAmt, ref ? `${method} — ${ref}` : method);
     logActivity({ category: "plot", action: "payment", description: `Plot ${plotPayTarget.plot_number} payment of KES ${parsedPlotAmt.toLocaleString()} via ${method} by ${memberInfo?.name ?? "member"}`, meta: { plot_id: plotPayTarget.id, amount: parsedPlotAmt, method } });
     if (method === "mpesa") {
+      const baseComment = `PHONE:${phone ?? ""}|ACCOUNT:${plotPayTarget.plot_number}|${plotPayTarget.plot_number}`;
       await paymentsApi.create({
-        payment_id: viaStk ? ref : undefined,
+        payment_id: ref ?? undefined,
         date_paid: new Date().toISOString().slice(0, 10),
         amount: parsedPlotAmt,
-        paid_by: memberInfo?.name ?? "",
+        paid_by: extras?.paidBy || memberInfo?.name || "",
         purpose: "Plot Payment",
         mode: "Mpesa",
-        comment: `PHONE:${phone ?? ""}|ACCOUNT:${plotPayTarget.plot_number}|${plotPayTarget.plot_number}`,
+        comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
       });
     }
     closeAllPay();
@@ -4260,15 +4262,14 @@ function MyPlotsPage() {
         assignedName={profile.full_name}
         memberPhone={payPlot.member_phone ?? undefined}
         onClose={() => setPayPlot(null)}
-        onSave={async (amount, method, reference, _viaStk, phone) => {
+        onSave={async (amount, method, reference, _viaStk, phone, extras) => {
           const today = new Date().toISOString().split("T")[0];
 
-          // Resolve payer name: for M-Pesa STK, look up by the payer phone from the stored callback
-          let payerName = profile.full_name;
+          // extras.paidBy overrides for manual; for STK try resolving from callback
+          let payerName = extras?.paidBy || profile.full_name;
           let payerPhone = phone ?? "";
-          if (method === "mpesa" && reference) {
+          if (method === "mpesa" && reference && !extras) {
             try {
-              // Try to get name from stored Safaricom callback
               const { data: cbRow } = await supabase
                 .from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
               if (cbRow?.value) {
@@ -4277,7 +4278,6 @@ function MyPlotsPage() {
                 const cbPhone = String(cbItems.find((i) => i.Name === "PhoneNumber")?.Value ?? "");
                 if (cbPhone) {
                   payerPhone = cbPhone;
-                  // Look up member by phone in shareholders and clients
                   const norm = cbPhone.replace(/^254/, "0");
                   const [shRows, clRows] = await Promise.all([
                     supabase.from("shareholders").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
@@ -4297,11 +4297,12 @@ function MyPlotsPage() {
             phone: payerPhone,
             fine: "",
             status: "",
-            note: "",
+            note: extras?.comment ?? "",
           });
           await plotPaymentsApi.insert(payPlot.id, amount, structuredNotes, today);
           await plotsApi.recordPayment(payPlot.id, amount);
           if (method === "mpesa" && reference) {
+            const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payPlot.plot_number}`;
             await paymentsApi.create({
               payment_id: reference,
               date_paid: today,
@@ -4309,13 +4310,12 @@ function MyPlotsPage() {
               paid_by: payerName,
               purpose: "Plot Payment",
               mode: "Mpesa",
-              comment: `PHONE:${payerPhone}|ACCOUNT:${payPlot.plot_number}`,
+              comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
             });
           }
           logActivity({ category: "plot", action: "payment", description: `Plot ${payPlot.plot_number} payment of KES ${amount.toLocaleString()} via ${method}${reference ? ` (${reference})` : ""}`, actor_name: payerName, meta: { plot_id: payPlot.id, amount, method, ref: reference } });
           toast.success("Payment recorded successfully.");
           loadPlots();
-          // Refresh the inline history if it's open
           setRefreshKeys((prev) => ({ ...prev, [payPlot.id]: (prev[payPlot.id] ?? 0) + 1 }));
           setExpandedId(payPlot.id);
         }}
@@ -5458,7 +5458,7 @@ interface PaymentModalProps {
   memberName?: string;
   memberPhone?: string;
   accountRef?: string;
-  onComplete: (method: PayMethod, reference?: string, viaStk?: boolean, phone?: string) => Promise<void>;
+  onComplete: (method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => Promise<void>;
   onClose: () => void;
 }
 
@@ -5492,6 +5492,9 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
   // M-Pesa sub-mode
   const [mpesaMode, setMpesaMode] = useState<"stk" | "manual">("stk");
   const [manualRef, setManualRef] = useState("");
+  const [manualPaidBy, setManualPaidBy] = useState(memberName ?? "");
+  const [manualPhone, setManualPhone] = useState(memberPhone ?? "");
+  const [manualComment, setManualComment] = useState("");
 
   // STK Push state
   const [stkPhone, setStkPhone] = useState(memberPhone ?? "");
@@ -5640,7 +5643,10 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
     if (!manualRef.trim()) { setErr("Enter M-Pesa transaction code"); return; }
     setErr(""); setProcessing(true);
     try {
-      await onComplete("mpesa", manualRef.trim().toUpperCase());
+      await onComplete("mpesa", manualRef.trim().toUpperCase(), false, manualPhone || undefined, {
+        paidBy: manualPaidBy || undefined,
+        comment: manualComment || undefined,
+      });
     } catch (e: any) { setErr(e.message); setProcessing(false); }
   };
 
@@ -5801,7 +5807,28 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
                       placeholder="e.g. QHX4XXXXXXX"
                       className="w-full border rounded-xl px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-200"
                       style={{ borderColor: "var(--border)" }} />
-                    <p className="text-xs text-gray-400 mt-1.5">Enter the M-Pesa confirmation code from the customer's SMS</p>
+                    <p className="text-xs text-gray-400 mt-1">Enter the M-Pesa confirmation code from the customer's SMS</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-500 mb-1 block">Paid By</label>
+                    <input value={manualPaidBy} onChange={(e) => setManualPaidBy(e.target.value)}
+                      placeholder="Name of payer"
+                      className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                      style={{ borderColor: "var(--border)" }} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-500 mb-1 block">Phone</label>
+                    <input value={manualPhone} onChange={(e) => setManualPhone(e.target.value)}
+                      placeholder="e.g. 0712345678"
+                      className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                      style={{ borderColor: "var(--border)" }} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-500 mb-1 block">Comments</label>
+                    <input value={manualComment} onChange={(e) => setManualComment(e.target.value)}
+                      placeholder="Optional note"
+                      className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                      style={{ borderColor: "var(--border)" }} />
                   </div>
                   {err && <p className="text-xs font-medium text-red-500 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
                   <div className="flex gap-2">
@@ -5933,30 +5960,32 @@ function RecordContributionModal({
     setShowPayment(true);
   };
 
-  const handleSave = async (method: PayMethod, reference?: string, viaStk?: boolean, phone?: string) => {
+  const handleSave = async (method: PayMethod, reference?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
     setSaving(true); setErr("");
     try {
       const monthName = MONTHS[(form.month - 1)];
+      const today = new Date().toISOString().slice(0, 10);
       const c = await contributionsApi.record({
         shareholder_id: form.shareholder_id,
         amount: amt,
         month: form.month,
         year: form.year,
-        payment_date: form.payment_date,
+        payment_date: today,
         notes: [form.notes, method !== "mpesa" && reference ? `Ref: ${reference}` : "", method ? `via ${method}` : ""].filter(Boolean).join(" · ") || undefined,
       });
       // Record in M-Pesa Payments for any mpesa payment
       if (method === "mpesa") {
         const memberNo = selectedSh?.member_number ? String(selectedSh.member_number) : undefined;
         const phoneVal = phone ?? selectedSh?.phone ?? "";
+        const baseComment = `PHONE:${phoneVal}|ACCOUNT:${memberNo ?? ""}|Contribution ${monthName} ${form.year}`;
         await paymentsApi.create({
-          payment_id: viaStk ? reference : undefined,
-          date_paid: form.payment_date,
+          payment_id: reference ?? undefined,
+          date_paid: today,
           amount: amt,
-          paid_by: selectedSh?.name ?? "Unknown",
+          paid_by: extras?.paidBy || selectedSh?.name || "Unknown",
           purpose: "Contribution",
           mode: "Mpesa",
-          comment: `PHONE:${phoneVal}|ACCOUNT:${memberNo ?? ""}|Contribution ${monthName} ${form.year}`,
+          comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
           shareholder_id: form.shareholder_id,
         });
       }
@@ -6022,22 +6051,6 @@ function RecordContributionModal({
               <input type="number" min="1" placeholder="0.00" value={form.amount}
                 onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
                 className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" style={{ borderColor: "var(--border)" }} />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1">Payment Date</label>
-              <input type="date" value={form.payment_date}
-                onChange={(e) => setForm((f) => ({ ...f, payment_date: e.target.value }))}
-                className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none" style={{ borderColor: "var(--border)" }} />
-              {form.payment_date && form.month && (() => {
-                const deadline = new Date(form.year, form.month, 10);
-                const late = new Date(form.payment_date) > deadline;
-                return late ? (
-                  <p className="text-xs text-amber-600 mt-1">
-                    After {MONTHS[form.month - 1]} deadline (10 {MONTHS[form.month] ?? "of next month"}) — will be marked <strong>Late</strong>
-                  </p>
-                ) : null;
-              })()}
             </div>
 
             <div>

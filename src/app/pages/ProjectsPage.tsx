@@ -357,7 +357,7 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
   memberPhone?: string;
   isAdmin?: boolean;
   onClose: () => void;
-  onSave: (amount: number, method: PayMethod, reference?: string, viaStk?: boolean, phone?: string) => Promise<void>;
+  onSave: (amount: number, method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => Promise<void>;
 }) {
   const due = Math.max(0, Number(plot.price) - Number(plot.paid_amount));
   const [step, setStep] = useState<"amount" | "method">("amount");
@@ -376,6 +376,9 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
   const [method, setMethod] = useState<PayMethod>("mpesa");
   const [mpesaMode, setMpesaMode] = useState<"stk" | "manual">("stk");
   const [manualRef, setManualRef] = useState("");
+  const [manualPaidBy, setManualPaidBy] = useState(assignedName ?? "");
+  const [manualPhone, setManualPhone] = useState(memberPhone ?? "");
+  const [manualComment, setManualComment] = useState("");
   const [reference, setReference] = useState("");
   const [chequeNo, setChequeNo] = useState("");
   const [bankName, setBankName] = useState("");
@@ -527,7 +530,12 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
         method === "cheque" ? chequeNo :
         method === "bank" ? `${bankName} ${reference}`.trim() :
         reference;
-      await onSave(parsedAmount, method, ref || undefined);
+      const isManualMpesa = method === "mpesa" && mpesaMode === "manual";
+      await onSave(
+        parsedAmount, method, ref || undefined, false,
+        isManualMpesa ? (manualPhone || undefined) : undefined,
+        isManualMpesa ? { paidBy: manualPaidBy || undefined, comment: manualComment || undefined } : undefined,
+      );
       onClose();
     } catch (e: any) {
       setErr(e.message);
@@ -696,10 +704,35 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
 
                   {isAdmin && mpesaMode === "manual" && (
                     <div className="space-y-3">
-                      <input type="text" value={manualRef} onChange={(e) => setManualRef(e.target.value.toUpperCase())}
-                        placeholder="M-Pesa code e.g. QHX4XXXXXXX"
-                        className="w-full border rounded-xl px-3 py-2.5 text-sm font-mono focus:outline-none"
-                        style={{ borderColor: "var(--border)" }} />
+                      <div>
+                        <label className="text-xs font-semibold text-gray-500 mb-1 block">M-Pesa Transaction Code</label>
+                        <input type="text" value={manualRef} onChange={(e) => setManualRef(e.target.value.toUpperCase())}
+                          placeholder="e.g. QHX4XXXXXXX"
+                          className="w-full border rounded-xl px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-200"
+                          style={{ borderColor: "var(--border)" }} />
+                        <p className="text-xs text-gray-400 mt-1">Enter the M-Pesa confirmation code from the customer's SMS</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-500 mb-1 block">Paid By</label>
+                        <input type="text" value={manualPaidBy} onChange={(e) => setManualPaidBy(e.target.value)}
+                          placeholder="Name of payer"
+                          className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                          style={{ borderColor: "var(--border)" }} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-500 mb-1 block">Phone</label>
+                        <input type="text" value={manualPhone} onChange={(e) => setManualPhone(e.target.value)}
+                          placeholder="e.g. 0712345678"
+                          className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                          style={{ borderColor: "var(--border)" }} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-500 mb-1 block">Comments</label>
+                        <input type="text" value={manualComment} onChange={(e) => setManualComment(e.target.value)}
+                          placeholder="Optional note"
+                          className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-200"
+                          style={{ borderColor: "var(--border)" }} />
+                      </div>
                       {err && <p className="text-xs text-red-500 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
                       <div className="flex gap-2">
                         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border text-sm font-semibold text-gray-500 hover:bg-gray-50" style={{ borderColor: "var(--border)" }}>Cancel</button>
@@ -2847,20 +2880,21 @@ function ProjectDetailView({
     await load();
   };
 
-  const handlePayment = async (plotId: number, amount: number, method: PayMethod = "cash", ref?: string, viaStk?: boolean, phone?: string) => {
+  const handlePayment = async (plotId: number, amount: number, method: PayMethod = "cash", ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
     const plot = plots.find((p) => p.id === plotId);
     await plotsApi.recordPayment(plotId, amount, ref ? `${method} — ${ref}` : method);
     logActivity({ category: "plot", action: "payment", description: `Plot ${plot?.plot_number ?? plotId} payment of KES ${amount.toLocaleString()} via ${method} in project "${project.project_name}"`, meta: { plot_id: plotId, amount, method } });
     if (method === "mpesa" && plot) {
       const { paymentsApi } = await import("@/lib/api");
+      const baseComment = `PHONE:${phone ?? ""}|ACCOUNT:${plot.plot_number}|${plot.plot_number}`;
       await paymentsApi.create({
-        payment_id: viaStk ? ref : undefined,
+        payment_id: ref ?? undefined,
         date_paid: new Date().toISOString().slice(0, 10),
         amount,
-        paid_by: assignedName(plot),
+        paid_by: extras?.paidBy || assignedName(plot),
         purpose: "Plot Payment",
         mode: "Mpesa",
-        comment: `PHONE:${phone ?? ""}|ACCOUNT:${plot.plot_number}|${plot.plot_number}`,
+        comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
       });
     }
     await load();
@@ -3537,7 +3571,7 @@ function ProjectDetailView({
             return undefined;
           })()}
           onClose={() => setPayTarget(null)}
-          onSave={(amt, method, ref, viaStk, phone) => handlePayment(payTarget.id, amt, method, ref, viaStk, phone)} />
+          onSave={(amt, method, ref, viaStk, phone, extras) => handlePayment(payTarget.id, amt, method, ref, viaStk, phone, extras)} />
       )}
       {editPlotTarget && (
         <EditPlotModal plot={editPlotTarget}
