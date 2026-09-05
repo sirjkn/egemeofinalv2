@@ -2882,16 +2882,51 @@ function ProjectDetailView({
 
   const handlePayment = async (plotId: number, amount: number, method: PayMethod = "cash", ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
     const plot = plots.find((p) => p.id === plotId);
-    await plotsApi.recordPayment(plotId, amount, ref ? `${method} — ${ref}` : method);
-    logActivity({ category: "plot", action: "payment", description: `Plot ${plot?.plot_number ?? plotId} payment of KES ${amount.toLocaleString()} via ${method} in project "${project.project_name}"`, meta: { plot_id: plotId, amount, method } });
+    const today = new Date().toISOString().slice(0, 10);
+
+    // For STK: try resolving payer name/phone from Safaricom callback
+    let payerName = extras?.paidBy || (plot ? assignedName(plot) : "");
+    let payerPhone = phone ?? "";
+    if (method === "mpesa" && ref && !extras) {
+      try {
+        const { data: cbRow } = await supabase.from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
+        if (cbRow?.value) {
+          const stkCb = (cbRow.value as any)?.Body?.stkCallback ?? cbRow.value;
+          const cbItems: { Name: string; Value?: string | number }[] = stkCb?.CallbackMetadata?.Item ?? [];
+          const cbPhone = String(cbItems.find((i) => i.Name === "PhoneNumber")?.Value ?? "");
+          if (cbPhone) {
+            payerPhone = cbPhone;
+            const norm = cbPhone.replace(/^254/, "0");
+            const [shRows, clRows] = await Promise.all([
+              supabase.from("shareholders").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
+              supabase.from("clients").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
+            ]);
+            const found = shRows.data?.[0]?.name ?? clRows.data?.[0]?.name;
+            if (found) payerName = found;
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
+    const structuredNotes = JSON.stringify({
+      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : "Cash",
+      ref: ref ?? "",
+      paidBy: payerName,
+      phone: payerPhone,
+      fine: "",
+      status: "",
+      note: extras?.comment ?? "",
+    });
+    await plotsApi.recordPayment(plotId, amount, structuredNotes, today);
+    logActivity({ category: "plot", action: "payment", description: `Plot ${plot?.plot_number ?? plotId} payment of KES ${amount.toLocaleString()} via ${method} by ${payerName} in project "${project.project_name}"`, meta: { plot_id: plotId, amount, method } });
     if (method === "mpesa" && plot) {
       const { paymentsApi } = await import("@/lib/api");
-      const baseComment = `PHONE:${phone ?? ""}|ACCOUNT:${plot.plot_number}|${plot.plot_number}`;
+      const baseComment = `PHONE:${payerPhone}|ACCOUNT:${plot.plot_number}`;
       await paymentsApi.create({
         payment_id: ref ?? undefined,
-        date_paid: new Date().toISOString().slice(0, 10),
+        date_paid: today,
         amount,
-        paid_by: extras?.paidBy || assignedName(plot),
+        paid_by: payerName,
         purpose: "Plot Payment",
         mode: "Mpesa",
         comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,

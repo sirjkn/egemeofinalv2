@@ -32,6 +32,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase";
 import { ProjectsPage, AssignedPlotCard, PlotPaymentModal } from "@/app/pages/ProjectsPage";
+import { LeadsPage } from "@/app/pages/LeadsPage";
 import { ReportsPage } from "@/app/pages/ReportsPage";
 import { SettingsPage, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
 import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, fmtKES, fmtKESFull, fmtDate } from "@/app/shared";
@@ -40,6 +41,7 @@ import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings } from "@/lib/m
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
 import { toast, Toaster } from "sonner";
 import { LoginPage, SetPasswordPage, fetchProfile, type UserProfile, phoneToEmail } from "@/app/pages/AuthPage";
+import { ImpersonationCtx, useImpersonation } from "@/lib/impersonation";
 import { ShareholderPortal, ClientPortal, InvestorPortal } from "@/app/pages/MemberPortal";
 import {
   BarChart as RechartBarChart, Bar,
@@ -54,15 +56,19 @@ type Module =
   | "dashboard" | "shareholders" | "clients" | "contributions"
   | "projects" | "investors" | "payments" | "refunds"
   | "reports" | "settings" | "my-plots" | "help"
-  | "mpesa-transactions";
+  | "mpesa-transactions" | "leads";
 
 type PreviewRole = "admin" | "shareholder" | "client";
 
 // ─── Profile Context ──────────────────────────────────────────────────────────
 
 const ProfileCtx = createContext<UserProfile | null>(null);
-function useProfile() { return useContext(ProfileCtx); }
-function useIsViewOnly() { const p = useProfile(); return !!p && p.role !== "admin"; }
+function useProfile() {
+  const { impersonating } = useImpersonation();
+  const real = useContext(ProfileCtx);
+  return impersonating ?? real;
+}
+function useIsViewOnly() { const p = useProfile(); return !!p && p.role !== "admin" && p.role !== "reception"; }
 function useCanMakePayment() { const p = useProfile(); return !!p && (p.role === "admin" || p.role === "reception"); }
 
 // Billing cycle: day 1–10 → previous month's contribution period; day 11+ → current month
@@ -113,11 +119,11 @@ function useSystemLive() {
 }
 
 const ROLE_NAV: Record<string, Module[]> = {
-  admin:       ["dashboard","shareholders","clients","contributions","projects","investors","payments","refunds","reports","mpesa-transactions","settings"],
+  admin:       ["dashboard","shareholders","clients","contributions","projects","investors","payments","refunds","leads","reports","mpesa-transactions","settings"],
   shareholder: ["dashboard","contributions","projects","my-plots","payments","settings"],
   client:      ["dashboard","my-plots","refunds","settings"],
   investor:    ["dashboard","projects","my-plots","settings"],
-  reception:   ["dashboard","shareholders","clients","contributions","projects","investors","payments","refunds","reports","mpesa-transactions"],
+  reception:   ["dashboard","shareholders","clients","contributions","projects","investors","payments","refunds","leads","reports","mpesa-transactions"],
 };
 
 // ─── Nav config ───────────────────────────────────────────────────────────────
@@ -201,6 +207,7 @@ const navItems: NavItem[] = [
   { id: "payments",           label: "Payments",             icon: <CreditCard size={19} color="#fff" />,        iconBg: "#14b8a6" },
   { id: "mpesa-transactions", label: "M-Pesa Transactions", icon: <RefreshCw size={19} color="#fff" />,        iconBg: "#0ea5e9" },
   { id: "refunds",            label: "Refunds",             icon: <RotateCcw size={19} color="#fff" />,        iconBg: "#ef4444" },
+  { id: "leads",        label: "Leads",          icon: <TrendingUp size={19} color="#fff" />,         iconBg: "#7c3aed" },
   { id: "reports",      label: "Reports",        icon: <BarChart2 size={19} color="#fff" />,         iconBg: "#3b82f6", hasChevron: true },
   { id: "settings",     label: "Settings",       icon: <SlidersHorizontal size={19} color="#fff" />, iconBg: "#64748b", hasChevron: true },
   { id: "my-plots",     label: "My Plots",       icon: <MapPin size={19} color="#fff" />,            iconBg: "#059669" },
@@ -3177,15 +3184,51 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
   const handlePlotPayComplete = async (method: PayMethod, ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
     if (!plotPayTarget) return;
-    await plotsApi.recordPayment(plotPayTarget.id, parsedPlotAmt, ref ? `${method} — ${ref}` : method);
-    logActivity({ category: "plot", action: "payment", description: `Plot ${plotPayTarget.plot_number} payment of KES ${parsedPlotAmt.toLocaleString()} via ${method} by ${memberInfo?.name ?? "member"}`, meta: { plot_id: plotPayTarget.id, amount: parsedPlotAmt, method } });
+    const today = new Date().toISOString().slice(0, 10);
+
+    // For STK: resolve payer name/phone from Safaricom callback
+    let payerName = extras?.paidBy || memberInfo?.name || "";
+    let payerPhone = phone ?? memberShareholder?.phone ?? "";
+    if (method === "mpesa" && ref && !extras) {
+      try {
+        const { data: cbRow } = await supabase
+          .from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
+        if (cbRow?.value) {
+          const stkCb = (cbRow.value as any)?.Body?.stkCallback ?? cbRow.value;
+          const cbItems: { Name: string; Value?: string | number }[] = stkCb?.CallbackMetadata?.Item ?? [];
+          const cbPhone = String(cbItems.find((i) => i.Name === "PhoneNumber")?.Value ?? "");
+          if (cbPhone) {
+            payerPhone = cbPhone;
+            const norm = cbPhone.replace(/^254/, "0");
+            const [shRows, clRows] = await Promise.all([
+              supabase.from("shareholders").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
+              supabase.from("clients").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
+            ]);
+            const found = shRows.data?.[0]?.name ?? clRows.data?.[0]?.name;
+            if (found) payerName = found;
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
+    const structuredNotes = JSON.stringify({
+      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : "Cash",
+      ref: ref ?? "",
+      paidBy: payerName,
+      phone: payerPhone,
+      fine: "",
+      status: "",
+      note: extras?.comment ?? "",
+    });
+    await plotsApi.recordPayment(plotPayTarget.id, parsedPlotAmt, structuredNotes, today);
+    logActivity({ category: "plot", action: "payment", description: `Plot ${plotPayTarget.plot_number} payment of KES ${parsedPlotAmt.toLocaleString()} via ${method} by ${payerName}`, meta: { plot_id: plotPayTarget.id, amount: parsedPlotAmt, method } });
     if (method === "mpesa") {
-      const baseComment = `PHONE:${phone ?? ""}|ACCOUNT:${plotPayTarget.plot_number}|${plotPayTarget.plot_number}`;
+      const baseComment = `PHONE:${payerPhone}|ACCOUNT:${plotPayTarget.plot_number}`;
       await paymentsApi.create({
         payment_id: ref ?? undefined,
-        date_paid: new Date().toISOString().slice(0, 10),
+        date_paid: today,
         amount: parsedPlotAmt,
-        paid_by: extras?.paidBy || memberInfo?.name || "",
+        paid_by: payerName,
         purpose: "Plot Payment",
         mode: "Mpesa",
         comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
@@ -4159,6 +4202,16 @@ function MyPlotsPage() {
   const [payPlot, setPayPlot]         = useState<any | null>(null);
   const [expandedId, setExpandedId]   = useState<number | null>(null);
   const [refreshKeys, setRefreshKeys] = useState<Record<number, number>>({});
+  const [memberPhone, setMemberPhone] = useState<string>("");
+
+  // Fetch the logged-in member's phone for STK push pre-fill
+  useEffect(() => {
+    if (!profile.member_id) return;
+    const table = profile.role === "shareholder" ? "shareholders" : profile.role === "client" ? "clients" : null;
+    if (!table) return;
+    supabase.from(table).select("phone").eq("id", profile.member_id).maybeSingle()
+      .then(({ data }) => { if (data?.phone) setMemberPhone(data.phone); });
+  }, [profile.member_id, profile.role]);
 
   const loadPlots = useCallback(() => {
     if (!profile.member_id || profile.role === "investor") { setLoading(false); return; }
@@ -4260,7 +4313,7 @@ function MyPlotsPage() {
         plot={payPlot}
         projectName={payPlot.project?.project_name}
         assignedName={profile.full_name}
-        memberPhone={payPlot.member_phone ?? undefined}
+        memberPhone={memberPhone || undefined}
         onClose={() => setPayPlot(null)}
         onSave={async (amount, method, reference, _viaStk, phone, extras) => {
           const today = new Date().toISOString().split("T")[0];
@@ -4299,8 +4352,7 @@ function MyPlotsPage() {
             status: "",
             note: extras?.comment ?? "",
           });
-          await plotPaymentsApi.insert(payPlot.id, amount, structuredNotes, today);
-          await plotsApi.recordPayment(payPlot.id, amount);
+          await plotsApi.recordPayment(payPlot.id, amount, structuredNotes, today);
           if (method === "mpesa" && reference) {
             const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payPlot.plot_number}`;
             await paymentsApi.create({
@@ -6916,6 +6968,7 @@ const moduleLabels: Record<Module, string> = {
   contributions: "Contributions", projects: "Projects", investors: "Ext. Investors",
   payments: "Payments", refunds: "Refunds", reports: "Reports",
   settings: "Settings", "my-plots": "My Plots", help: "Help & Support",
+  leads: "Leads", "mpesa-transactions": "M-Pesa Transactions",
 };
 
 const moduleIconMap: Record<Module, { icon: React.ReactNode; bg: string; color: string }> = {
@@ -6929,8 +6982,10 @@ const moduleIconMap: Record<Module, { icon: React.ReactNode; bg: string; color: 
   refunds:       { icon: <RotateCcw size={36} />,        bg: "#fef2f2", color: "#ef4444" },
   reports:       { icon: <BarChart2 size={36} />,        bg: "#eff6ff", color: "#3b82f6" },
   settings:      { icon: <SlidersHorizontal size={36} />,bg: "#f8fafc", color: "#64748b" },
-  "my-plots":    { icon: <MapPin size={36} />,           bg: "#ecfdf5", color: "#059669" },
-  help:          { icon: <HelpCircle size={36} />,       bg: "#f5f3ff", color: "#8b5cf6" },
+  "my-plots":          { icon: <MapPin size={36} />,           bg: "#ecfdf5", color: "#059669" },
+  help:                { icon: <HelpCircle size={36} />,       bg: "#f5f3ff", color: "#8b5cf6" },
+  leads:               { icon: <TrendingUp size={36} />,       bg: "#f5f3ff", color: "#7c3aed" },
+  "mpesa-transactions":{ icon: <RefreshCw size={36} />,        bg: "#f0f9ff", color: "#0ea5e9" },
 };
 
 function PlaceholderPage({ module }: { module: Module }) {
@@ -7110,6 +7165,7 @@ function AppShell() {
   const isAdmin    = !useIsViewOnly();
   const profile    = useProfile();
   const systemLive = useSystemLive();
+  const { impersonating, setImpersonating } = useImpersonation();
 
   // Guard: redirect to dashboard if non-admin navigates to a module outside their role OR that is hidden for their role
   const hiddenForRole = useHiddenModules(profile?.role ?? "investor");
@@ -7168,6 +7224,23 @@ function AppShell() {
         </div>
 
       <div className="flex-1 flex flex-col overflow-hidden" style={{ background: "var(--background)" }}>
+        {/* Impersonation banner */}
+        {impersonating && (
+          <div className="flex-shrink-0 flex items-center justify-between px-4 py-1.5 text-xs font-semibold z-50" style={{ background: "#fef08a", borderBottom: "2px solid #facc15" }}>
+            <div className="flex items-center gap-2">
+              <span style={{ color: "#78350f" }}>👁 Viewing as</span>
+              <span className="font-bold px-2 py-0.5 rounded-full text-white" style={{ background: "#7c3aed" }}>{impersonating.full_name}</span>
+              <span className="px-2 py-0.5 rounded-full font-bold uppercase" style={{ background: "#f5f3ff", color: "#7c3aed" }}>{impersonating.role}</span>
+            </div>
+            <button
+              onClick={() => setImpersonating(null)}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg font-bold text-white transition-colors hover:opacity-90"
+              style={{ background: "#7c3aed" }}
+            >
+              <X size={12} /> Exit Preview
+            </button>
+          </div>
+        )}
         <header className="flex items-center gap-3 px-4 md:px-6 py-3 border-b bg-white flex-shrink-0" style={{ borderColor: "var(--card-border)" }}>
           {active !== "dashboard" && (
             <button
@@ -7217,6 +7290,8 @@ function AppShell() {
             <ContributionsPage />
           ) : active === "projects" ? (
             <ProjectsPage isAdmin={isAdmin} currentMemberId={profile?.member_id} currentMemberType={profile?.role} />
+          ) : active === "leads" ? (
+            <div className="h-full overflow-hidden"><LeadsPage /></div>
           ) : active === "reports" ? (
             <ReportsPage />
           ) : active === "payments" ? (
@@ -7309,6 +7384,7 @@ export default function App() {
   const [authReady, setAuthReady]   = useState(false);
   const [session,   setSession]     = useState<any>(null);
   const [profile,   setProfile]     = useState<UserProfile | null>(null);
+  const [impersonating, setImpersonating] = useState<UserProfile | null>(null);
   const [splashName, setSplashName] = useState(() => localStorage.getItem("sacco_splash_name") || "Egemeo Ardhi");
   const [splashLogo, setSplashLogo] = useState(() => localStorage.getItem("sacco_splash_logo") || "");
 
@@ -7433,8 +7509,10 @@ export default function App() {
 
   // All roles — same shell with role-filtered nav via ProfileCtx
   return (
-    <ProfileCtx.Provider value={profile}>
-      <RouterProvider router={router} />
-    </ProfileCtx.Provider>
+    <ImpersonationCtx.Provider value={{ impersonating, realProfile: profile, setImpersonating }}>
+      <ProfileCtx.Provider value={profile}>
+        <RouterProvider router={router} />
+      </ProfileCtx.Provider>
+    </ImpersonationCtx.Provider>
   );
 }

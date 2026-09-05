@@ -23,6 +23,9 @@ import { downloadSystemGuidePdf } from "@/lib/pdf";
 import { getPaymentSettings, type PaymentSettings } from "@/lib/mpesa";
 import { loadPaymentSettingsFromDb, savePaymentSettingsToDb, loadSmsSettingsFromDb, saveSmsSettingsToDb } from "@/lib/settingsApi";
 import { getSmsSettings, saveSmsSettings, mergeSmsSettings, sendSms, SMS_TRIGGERS, DEFAULT_TEMPLATES, interpolate, type SmsSettings } from "@/lib/sms";
+import { useImpersonation } from "@/lib/impersonation";
+import type { UserProfile } from "@/app/pages/AuthPage";
+import { useNavigate } from "react-router";
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
@@ -4078,12 +4081,188 @@ function SystemGuideCard() {
   );
 }
 
+// ─── Login As Card ────────────────────────────────────────────────────────────
+
+type MemberEntry = {
+  id: number;
+  name: string;
+  phone?: string;
+  role: "shareholder" | "client" | "investor";
+};
+
+function LoginAsCard() {
+  const { impersonating, setImpersonating } = useImpersonation();
+  const navigate = useNavigate();
+  const [members, setMembers] = useState<MemberEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from("shareholders").select("id, name, phone").order("name"),
+      supabase.from("clients").select("id, name, phone").order("name"),
+      supabase.from("investors").select("id, name, phone").order("name"),
+    ]).then(([sh, cl, inv]) => {
+      const all: MemberEntry[] = [
+        ...(sh.data ?? []).map((r) => ({ id: r.id, name: r.name, phone: r.phone, role: "shareholder" as const })),
+        ...(cl.data ?? []).map((r) => ({ id: r.id, name: r.name, phone: r.phone, role: "client" as const })),
+        ...(inv.data ?? []).map((r) => ({ id: r.id, name: r.name, phone: r.phone, role: "investor" as const })),
+      ];
+      setMembers(all);
+      setLoading(false);
+    });
+  }, []);
+
+  const filtered = members.filter((m) => {
+    const q = search.toLowerCase();
+    return !q || m.name.toLowerCase().includes(q) || (m.phone ?? "").includes(q);
+  });
+
+  const grouped: Record<string, MemberEntry[]> = {
+    shareholder: filtered.filter((m) => m.role === "shareholder"),
+    client:      filtered.filter((m) => m.role === "client"),
+    investor:    filtered.filter((m) => m.role === "investor"),
+  };
+
+  const ROLE_STYLE: Record<string, { label: string; color: string; bg: string }> = {
+    shareholder: { label: "Shareholder", color: "#6366f1", bg: "#eef2ff" },
+    client:      { label: "Client",      color: "#a855f7", bg: "#faf5ff" },
+    investor:    { label: "Investor",    color: "#eab308", bg: "#fefce8" },
+  };
+
+  const loginAs = (member: MemberEntry) => {
+    const synth: UserProfile = {
+      id: `preview-${member.role}-${member.id}`,
+      role: member.role,
+      member_id: member.id,
+      full_name: member.name,
+      email: "",
+      password_changed: true,
+    };
+    setImpersonating(synth);
+    navigate("/");
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+      {/* Header */}
+      <div className="px-5 py-4 flex items-center gap-3" style={{ background: "#f5f3ff", borderBottom: "1px solid #e9d5ff" }}>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "#7c3aed" }}>
+          <LogIn size={17} color="#fff" />
+        </div>
+        <div>
+          <h2 className="text-sm font-bold" style={{ color: "#1a202c" }}>Login As</h2>
+          <p className="text-xs mt-0.5" style={{ color: "#6d28d9" }}>Preview the app as any member — your admin session stays active</p>
+        </div>
+        {impersonating && (
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: "#7c3aed", color: "#fff" }}>
+              Active: {impersonating.full_name}
+            </span>
+            <button
+              onClick={() => setImpersonating(null)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors hover:bg-red-50"
+              style={{ color: "#dc2626", borderColor: "#fecaca" }}
+            >
+              <X size={12} /> Exit Preview
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="p-5">
+        {/* Info callout */}
+        <div className="rounded-xl p-3 flex items-start gap-2 mb-4" style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+          <AlertCircle size={14} color="#3b82f6" className="mt-0.5 flex-shrink-0" />
+          <p className="text-xs leading-relaxed" style={{ color: "#1e40af" }}>
+            Selecting a member launches preview mode. You will see exactly what they see in their dashboard.
+            The yellow banner at the top lets you exit at any time. Your admin session is never interrupted.
+          </p>
+        </div>
+
+        {/* Search */}
+        <div className="relative mb-4">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" color="#94a3b8" />
+          <input
+            className="w-full text-xs border rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-400"
+            style={{ borderColor: "var(--border)" }}
+            placeholder="Search by name or phone…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-10 gap-2 text-xs text-gray-400">
+            <Loader2 size={16} className="animate-spin" /> Loading members…
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {(["shareholder", "client", "investor"] as const).map((role) => {
+              const list = grouped[role];
+              const style = ROLE_STYLE[role];
+              if (list.length === 0) return null;
+              return (
+                <div key={role}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full" style={{ background: style.bg, color: style.color }}>
+                      {style.label}s
+                    </span>
+                    <span className="text-[11px]" style={{ color: "#94a3b8" }}>{list.length} members</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {list.map((member) => {
+                      const isActive = impersonating?.member_id === member.id && impersonating?.role === member.role;
+                      return (
+                        <div
+                          key={`${role}-${member.id}`}
+                          className="flex items-center gap-3 p-3 rounded-xl border transition-colors"
+                          style={{
+                            borderColor: isActive ? style.color : "#e2e8f0",
+                            background:  isActive ? style.bg   : "white",
+                          }}
+                        >
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-white"
+                            style={{ background: style.color }}>
+                            {member.name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold truncate" style={{ color: "#1a202c" }}>{member.name}</div>
+                            {member.phone && <div className="text-[10px] font-mono mt-0.5" style={{ color: "#94a3b8" }}>{member.phone}</div>}
+                          </div>
+                          <button
+                            onClick={() => loginAs(member)}
+                            className="flex-shrink-0 flex items-center gap-1 text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition-colors"
+                            style={isActive
+                              ? { background: style.color, color: "#fff" }
+                              : { background: style.bg, color: style.color }
+                            }
+                          >
+                            {isActive ? <><Eye size={11} /> Viewing</> : <><LogIn size={11} /> Login</>}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+            {filtered.length === 0 && (
+              <div className="text-center py-8 text-xs text-gray-400">No members match your search.</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AppMaintenancePage({ onBack }: { onBack: () => void }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState("");
   const [pwError, setPwError] = useState(false);
   const [showPw, setShowPw] = useState(false);
-  const [activeTab, setActiveTab] = useState<"system" | "modules" | "backup" | "database" | "danger" | "staff">("system");
+  const [activeTab, setActiveTab] = useState<"system" | "modules" | "backup" | "database" | "danger" | "staff" | "login-as">("system");
 
   const handleUnlock = () => {
     if (pwInput === MAINTENANCE_PASSWORD) { setUnlocked(true); setPwError(false); }
@@ -4190,12 +4369,13 @@ function AppMaintenancePage({ onBack }: { onBack: () => void }) {
   }
 
   const MAINT_TABS = [
-    { id: "system",   label: "System",    color: "#475569" },
-    { id: "staff",    label: "Staff",     color: "#1e2d4a" },
-    { id: "modules",  label: "Modules",   color: "#0ea5e9" },
-    { id: "backup",   label: "Backup",    color: "#16a34a" },
-    { id: "database", label: "Database",  color: "#6366f1" },
-    { id: "danger",   label: "Data Tools", color: "#ef4444" },
+    { id: "system",    label: "System",    color: "#475569" },
+    { id: "staff",     label: "Staff",     color: "#1e2d4a" },
+    { id: "modules",   label: "Modules",   color: "#0ea5e9" },
+    { id: "backup",    label: "Backup",    color: "#16a34a" },
+    { id: "database",  label: "Database",  color: "#6366f1" },
+    { id: "danger",    label: "Data Tools", color: "#ef4444" },
+    { id: "login-as",  label: "Login As",   color: "#7c3aed" },
   ] as const;
 
   return (
@@ -4270,6 +4450,9 @@ function AppMaintenancePage({ onBack }: { onBack: () => void }) {
 
         {/* ── Database tab ── */}
         {activeTab === "database" && <DatabaseConnectionCard />}
+
+        {/* ── Login As tab ── */}
+        {activeTab === "login-as" && <LoginAsCard />}
 
         {/* ── Danger tab ── */}
         {activeTab === "danger" && (
