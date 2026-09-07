@@ -35,7 +35,7 @@ import { ProjectsPage, AssignedPlotCard, PlotPaymentModal } from "@/app/pages/Pr
 import { LeadsPage } from "@/app/pages/LeadsPage";
 import { ReportsPage } from "@/app/pages/ReportsPage";
 import { SettingsPage, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
-import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, fmtKES, fmtKESFull, fmtDate } from "@/app/shared";
+import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, fmtKES, fmtKESFull, fmtDate, fmtDateTime } from "@/app/shared";
 import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
 import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
@@ -680,7 +680,7 @@ function ShareholderContributionsAccordion({ shareholder, onChanged }: {
                 return (
                   <tr key={c.id} className="border-t" style={{ borderColor: "var(--border)", background: rowBg }}>
                     <td className="px-3 py-1.5 font-semibold whitespace-nowrap" style={{ color: "#1a202c" }}>{MONTHS[c.month - 1]} {c.year}</td>
-                    <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{c.payment_date ? fmtDate(c.payment_date) : "—"}</td>
+                    <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{c.payment_date ? fmtDateTime(c.payment_date) : "—"}</td>
                     <td className="px-3 py-1.5 font-bold whitespace-nowrap" style={{ color: "#22c55e" }}>{fmtKESFull(Number(c.amount))}</td>
                     <td className="px-3 py-1.5"><ContribMethodLabel notes={c.notes} /></td>
                     <td className="px-3 py-1.5">
@@ -791,7 +791,7 @@ function ShareholderContributionsAccordion({ shareholder, onChanged }: {
                 {viewMulti.map((c, i) => {
                   return (
                     <tr key={c.id} className="border-t" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#dbeafe" }}>
-                      <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{c.payment_date ? fmtDate(c.payment_date) : "—"}</td>
+                      <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{c.payment_date ? fmtDateTime(c.payment_date) : "—"}</td>
                       <td className="px-3 py-1.5 font-bold whitespace-nowrap" style={{ color: "#22c55e" }}>{fmtKESFull(Number(c.amount))}</td>
                       <td className="px-3 py-1.5">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${c.status === "late" ? "bg-red-50 text-red-500" : "bg-green-50 text-green-600"}`}>
@@ -4072,7 +4072,7 @@ function PlotPaymentsInline({ plotId, refreshKey, plotNumber, projectName, membe
       const rows = payments.map((pmt) => {
         const f = parsePlotPaymentNotes(pmt.notes);
         return [
-          new Date(pmt.payment_date || pmt.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+          fmtDateTime(pmt.payment_date || pmt.created_at),
           fmtKESFull(Number(pmt.amount)),
           f.method,
           f.ref,
@@ -4171,7 +4171,7 @@ function PlotPaymentsInline({ plotId, refreshKey, plotNumber, projectName, membe
               <div key={pmt.id} className="grid px-3 py-2 items-center text-xs"
                 style={{ gridTemplateColumns: COLS, background: i % 2 === 0 ? "#dbeafe" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
                 <span className="text-gray-600">
-                  {new Date(pmt.payment_date || pmt.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                  {fmtDateTime(pmt.payment_date || pmt.created_at)}
                 </span>
                 <span className="font-bold text-green-600">{fmtKESFull(Number(pmt.amount))}</span>
                 <span className="text-gray-500 truncate pr-1">{f.method}</span>

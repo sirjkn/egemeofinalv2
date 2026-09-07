@@ -36,21 +36,21 @@ export const SMS_TRIGGERS = {
 
 export const DEFAULT_TEMPLATES: Record<string, string> = {
   sms_new_user:
-    "Welcome to Egemeo Ardhi SACCO, {name}! Your login phone: {phone}. Your password is your phone number — please change it after first login. - Egemeo Ardhi SACCO",
+    "Welcome to Egemeo Ardhi, {name}! Your login phone: {phone}. Please login to the system and create a new password. Thank you",
   sms_contrib_receipt:
-    "Dear {name}, your contribution of {amount} for {month} has been received.{ref} Thank you. - Egemeo Ardhi SACCO",
+    "Dear {name}, your contribution of {amount} for {month} has been received. Thank you. - Egemeo Ardhi ",
   sms_plot_assigned:
-    "Dear {name}, plot {plotNo} in {project} has been assigned to you. Total: {amount}. Welcome! - Egemeo Ardhi SACCO",
+    "Dear {name}, plot {plotNo} in {project} has been assigned to you. Total: {amount}. Welcome! - Egemeo Ardhi ",
   sms_password_reminder:
-    "Dear {name}, your password is your phone number: {phone}. Please log in and change it. - Egemeo Ardhi SACCO",
+    "Dear {name}, your password is your phone number: {phone}. Please log in and change it. - Egemeo Ardhi ",
   sms_reminder_5d:
-    "Dear {name}, your {month} contribution is due in 5 days. Pay on time to avoid late fees. - Egemeo Ardhi SACCO",
+    "Dear {name}, your {month} contribution is due in 5 days. Pay on time to avoid late fees. - Egemeo Ardhi ",
   sms_reminder_2d:
-    "Dear {name}, your {month} contribution is due in 2 days. Pay on time to avoid late fees. - Egemeo Ardhi SACCO",
+    "Dear {name}, your {month} contribution is due in 2 days. Pay on time to avoid late fees. - Egemeo Ardhi ",
   sms_reminder_1d:
-    "Dear {name}, your {month} contribution is due TOMORROW. Please pay today to avoid being marked late. - Egemeo Ardhi SACCO",
+    "Dear {name}, your {month} contribution is due TOMORROW. Please pay today to avoid being marked late. - Egemeo Ardhi ",
   sms_reminder_0d:
-    "Dear {name}, your {month} contribution is due TODAY. Pay now to avoid being marked late. - Egemeo Ardhi SACCO",
+    "Dear {name}, your {month} contribution is due TODAY. Pay now to avoid being marked late. - Egemeo Ardhi ",
 };
 
 // Substitute {variable} placeholders in a template string
@@ -67,7 +67,7 @@ function defaults(): SmsSettings {
   const triggers: Record<string, boolean> = {};
   Object.values(SMS_TRIGGERS).forEach((id) => { triggers[id] = true; });
   return {
-    smsEnabled: false,
+    smsEnabled: true,
     providerConfig: {
       provider: "africastalking",
       africastalking: { apiKey: "", username: "", senderId: "EgemeoArdhi" },

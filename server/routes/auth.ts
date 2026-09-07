@@ -158,4 +158,127 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   }
 });
 
+// ─── POST /api/auth/send-otp ──────────────────────────────────────────────────
+// Generate a 6-digit OTP, store it in app_settings with a 10-minute expiry,
+// and send it to the member's phone via the configured SMS provider.
+router.post("/send-otp", async (req: Request, res: Response) => {
+  const { email, phone } = req.body as { email: string; phone: string };
+  if (!email || !phone) {
+    return res.status(400).json({ success: false, error: "email and phone are required" });
+  }
+
+  try {
+    const { url, key } = getSupabaseConfig();
+
+    // 1. Generate OTP
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expires = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    // 2. Store in app_settings
+    await adminFetch(
+      `${url}/rest/v1/app_settings`,
+      key, "POST",
+      { key: `otp_reset_${email}`, value: { otp, expires } }
+    ).catch(() => null);
+    // Try upsert if insert fails (row already exists)
+    await fetch(`${url}/rest/v1/app_settings?key=eq.otp_reset_${encodeURIComponent(email)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, apikey: key },
+      body: JSON.stringify({ value: { otp, expires } }),
+    }).catch(() => null);
+
+    // 3. Read SMS settings from DB to know which provider to use
+    const settingsRes = await adminFetch(
+      `${url}/rest/v1/app_settings?key=eq.sms_settings&select=value`, key, "GET"
+    );
+    const smsSettings = settingsRes.json?.[0]?.value;
+
+    if (!smsSettings?.smsEnabled || !smsSettings?.providerConfig) {
+      // SMS not configured — return OTP in dev mode (dev/test environment fallback)
+      console.warn("[send-otp] SMS disabled or not configured. OTP:", otp);
+      return res.json({ success: true, dev_otp: otp, note: "SMS not configured; OTP returned for dev only" });
+    }
+
+    // 4. Send SMS
+    const pCfg = smsSettings.providerConfig;
+    const normPhone = phone.replace(/^\+?0/, "254").replace(/^\+/, "");
+    const message = `Your Egemeo Ardhi password reset code is: ${otp}. Valid for 10 minutes. Do not share this code.`;
+
+    if (pCfg.provider === "africastalking") {
+      const cfg = pCfg.africastalking;
+      await fetch("https://api.africastalking.com/version1/messaging", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", apiKey: cfg.apiKey },
+        body: new URLSearchParams({ username: cfg.username, to: `+${normPhone}`, message, ...(cfg.senderId ? { from: cfg.senderId } : {}) }).toString(),
+      });
+    } else if (pCfg.provider === "oramobile") {
+      const cfg = pCfg.oramobile;
+      await fetch(cfg.apiUrl || "https://sms.oramobile.co.ke/api/sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+        body: JSON.stringify({ to: normPhone, message, from: cfg.senderId || "EgemeoArdhi" }),
+      });
+    }
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error("[auth/send-otp]", err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── POST /api/auth/verify-otp-reset ─────────────────────────────────────────
+// Verify OTP and reset the user's password.
+router.post("/verify-otp-reset", async (req: Request, res: Response) => {
+  const { email, otp, newPassword } = req.body as { email: string; otp: string; newPassword: string };
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ success: false, error: "email, otp and newPassword are required" });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, error: "Password must be at least 6 characters" });
+  }
+
+  try {
+    const { url, key } = getSupabaseConfig();
+
+    // 1. Read stored OTP
+    const stored = await adminFetch(
+      `${url}/rest/v1/app_settings?key=eq.otp_reset_${encodeURIComponent(email)}&select=value`, key, "GET"
+    );
+    const entry = stored.json?.[0]?.value as { otp: string; expires: number } | undefined;
+
+    if (!entry) return res.status(400).json({ success: false, error: "No OTP found. Please request a new one." });
+    if (Date.now() > entry.expires) return res.status(400).json({ success: false, error: "OTP expired. Please request a new one." });
+    if (entry.otp !== otp) return res.status(400).json({ success: false, error: "Incorrect OTP. Please try again." });
+
+    // 2. Delete OTP (single-use)
+    await fetch(`${url}/rest/v1/app_settings?key=eq.otp_reset_${encodeURIComponent(email)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${key}`, apikey: key },
+    }).catch(() => null);
+
+    // 3. Find user's auth ID
+    const userId = await findAuthUserByEmail(email);
+    if (!userId) return res.status(400).json({ success: false, error: "Account not found." });
+
+    // 4. Reset password
+    const { res: patchRes, json: patchJson } = await adminFetch(
+      `${url}/auth/v1/admin/users/${userId}`, key, "PUT",
+      { password: newPassword }
+    );
+    if (!patchRes.ok) {
+      const msg = patchJson?.msg || patchJson?.message || patchJson?.error_description || "Failed to reset password";
+      return res.status(400).json({ success: false, error: msg });
+    }
+
+    // 5. Mark password as changed
+    await pool.query("UPDATE user_profiles SET password_changed = true WHERE id = $1", [userId]).catch(() => null);
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error("[auth/verify-otp-reset]", err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;

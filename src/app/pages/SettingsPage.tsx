@@ -21,7 +21,7 @@ import { fmtKES, fmtDate, MONTHS } from "@/app/shared";
 import { getCompanyDetails, saveCompanyDetails, type CompanyDetails } from "@/lib/company";
 import { downloadSystemGuidePdf } from "@/lib/pdf";
 import { getPaymentSettings, type PaymentSettings } from "@/lib/mpesa";
-import { loadPaymentSettingsFromDb, savePaymentSettingsToDb, loadSmsSettingsFromDb, saveSmsSettingsToDb } from "@/lib/settingsApi";
+import { loadPaymentSettingsFromDb, savePaymentSettingsToDb, loadSmsSettingsFromDb, saveSmsSettingsToDb, loadReminderTemplates, saveReminderTemplates } from "@/lib/settingsApi";
 import { getSmsSettings, saveSmsSettings, mergeSmsSettings, sendSms, SMS_TRIGGERS, DEFAULT_TEMPLATES, interpolate, type SmsSettings } from "@/lib/sms";
 import { useImpersonation } from "@/lib/impersonation";
 import type { UserProfile } from "@/app/pages/AuthPage";
@@ -5260,6 +5260,103 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
   const setTemplate = (id: string, val: string) =>
     setCfg((prev) => ({ ...prev, messageTemplates: { ...(prev.messageTemplates ?? {}), [id]: val } }));
 
+  // ── Reminder templates ─────────────────────────────────────────────────────
+  const PLOT_DEFAULT = "Dear {firstName}, please make payment for your plot {plotNumber} before deadline {deadline}. Regards, Egemeo Ardhi";
+  const CONTRIB_DEFAULT = "Dear {firstName}, this is a reminder to make your contribution on or before {deadline}. Regards, Egemeo Ardhi";
+  const [plotTemplate, setPlotTemplate] = useState(PLOT_DEFAULT);
+  const [contribTemplate, setContribTemplate] = useState(CONTRIB_DEFAULT);
+  const [remindersSaved, setRemindersSaved] = useState(false);
+  const [sendingPlot, setSendingPlot] = useState(false);
+  const [sendingContrib, setSendingContrib] = useState(false);
+  const [plotResult, setPlotResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [contribResult, setContribResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  useEffect(() => {
+    loadReminderTemplates().then((t) => {
+      setPlotTemplate(t.plot);
+      setContribTemplate(t.contribution);
+    }).catch(() => {});
+  }, []);
+
+  const saveReminders = async () => {
+    await saveReminderTemplates({ plot: plotTemplate, contribution: contribTemplate });
+    setRemindersSaved(true); setTimeout(() => setRemindersSaved(false), 2000);
+  };
+
+  const sendDeadline = () => {
+    const today = new Date();
+    // deadline = 10th of next month
+    return new Date(today.getFullYear(), today.getMonth() + 1, 10)
+      .toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  };
+
+  const sendPlotReminders = async () => {
+    setSendingPlot(true); setPlotResult(null);
+    try {
+      // Fetch all plots with outstanding balances and their owners
+      const { data: plots } = await supabase
+        .from("plots")
+        .select("id, plot_number, price, paid_amount, assigned_to, assigned_type")
+        .not("assigned_to", "is", null)
+        .gt("price", 0);
+
+      if (!plots?.length) { setPlotResult({ ok: true, msg: "No assigned plots found." }); return; }
+
+      let sent = 0; let failed = 0;
+      const deadline = sendDeadline();
+
+      for (const plot of plots) {
+        const balance = Number(plot.price) - Number(plot.paid_amount ?? 0);
+        if (balance <= 0) continue;
+        const table = plot.assigned_type === "shareholder" ? "shareholders" : "clients";
+        const { data: member } = await supabase.from(table).select("name, phone").eq("id", plot.assigned_to).maybeSingle();
+        if (!member?.phone) { failed++; continue; }
+        const firstName = member.name.split(" ")[0];
+        const msg = plotTemplate
+          .replace("{firstName}", firstName)
+          .replace("{plotNumber}", plot.plot_number ?? String(plot.id))
+          .replace("{deadline}", deadline);
+        try {
+          await sendSms(member.phone, msg, undefined, cfg);
+          sent++;
+        } catch { failed++; }
+      }
+      setPlotResult({ ok: true, msg: `Sent ${sent} reminder${sent !== 1 ? "s" : ""}.${failed > 0 ? ` ${failed} failed (no phone).` : ""}` });
+    } catch (e: any) {
+      setPlotResult({ ok: false, msg: e.message });
+    } finally { setSendingPlot(false); }
+  };
+
+  const sendContribReminders = async () => {
+    setSendingContrib(true); setContribResult(null);
+    try {
+      const { data: shareholders } = await supabase
+        .from("shareholders")
+        .select("name, phone")
+        .eq("status", "active");
+
+      if (!shareholders?.length) { setContribResult({ ok: true, msg: "No active shareholders found." }); return; }
+
+      let sent = 0; let failed = 0;
+      const deadline = sendDeadline();
+
+      for (const sh of shareholders) {
+        if (!sh.phone) { failed++; continue; }
+        const firstName = sh.name.split(" ")[0];
+        const msg = contribTemplate
+          .replace("{firstName}", firstName)
+          .replace("{deadline}", deadline);
+        try {
+          await sendSms(sh.phone, msg, undefined, cfg);
+          sent++;
+        } catch { failed++; }
+      }
+      setContribResult({ ok: true, msg: `Sent ${sent} reminder${sent !== 1 ? "s" : ""} to active shareholders.${failed > 0 ? ` ${failed} skipped (no phone).` : ""}` });
+    } catch (e: any) {
+      setContribResult({ ok: false, msg: e.message });
+    } finally { setSendingContrib(false); }
+  };
+
   const TRIGGERS: Array<{
     id: string; label: string; desc: string; icon: string;
     vars: string[]; example: Record<string, string>;
@@ -5637,6 +5734,97 @@ select cron.schedule(
           {saving ? <><Loader2 size={15} className="animate-spin" /> Saving…</> :
            saved  ? <><CheckCircle size={15} /> Saved!</> : "Save SMS Settings"}
         </button>
+
+        {/* ── Bulk Reminders ── */}
+        <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+          <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: "var(--card-border)", background: "#f8fafc" }}>
+            <div>
+              <h2 className="text-sm font-bold" style={{ color: "#1a202c" }}>Send Reminders</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Edit templates and send bulk SMS to members now</p>
+            </div>
+            <button
+              onClick={saveReminders}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors"
+              style={{ color: remindersSaved ? "#16a34a" : "#64748b", borderColor: remindersSaved ? "#bbf7d0" : "#e2e8f0", background: remindersSaved ? "#f0fdf4" : "white" }}
+            >
+              {remindersSaved ? <><CheckCircle size={12} /> Saved</> : "Save Templates"}
+            </button>
+          </div>
+
+          {/* Plot Reminder */}
+          <div className="p-5 border-b" style={{ borderColor: "#f1f5f9" }}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm">🏘️</span>
+              <h3 className="text-sm font-bold" style={{ color: "#1a202c" }}>Plot Payment Reminder</h3>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full ml-auto" style={{ background: "#eff6ff", color: "#2563eb" }}>
+                Clients &amp; Plot Owners
+              </span>
+            </div>
+            <p className="text-xs text-gray-400 mb-2">
+              Sent to all members with outstanding plot balances. Variables: <code className="bg-gray-100 px-1 rounded">{"{firstName}"}</code>{" "}
+              <code className="bg-gray-100 px-1 rounded">{"{plotNumber}"}</code>{" "}
+              <code className="bg-gray-100 px-1 rounded">{"{deadline}"}</code>
+            </p>
+            <textarea
+              className="w-full border rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-100 resize-none"
+              style={{ borderColor: "var(--border)", minHeight: 72 }}
+              value={plotTemplate}
+              onChange={(e) => setPlotTemplate(e.target.value)}
+            />
+            {plotResult && (
+              <div className={`mt-2 flex items-center gap-2 text-xs px-3 py-2 rounded-lg ${plotResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                {plotResult.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                {plotResult.msg}
+              </div>
+            )}
+            <button
+              onClick={sendPlotReminders}
+              disabled={sendingPlot || !cfg.smsEnabled}
+              className="mt-3 flex items-center gap-1.5 text-xs font-bold px-4 py-2.5 rounded-xl text-white transition-colors disabled:opacity-50"
+              style={{ background: "#2563eb" }}
+            >
+              {sendingPlot ? <><Loader2 size={12} className="animate-spin" /> Sending…</> : <><BellRing size={12} /> Send Plot Reminders</>}
+            </button>
+            {!cfg.smsEnabled && <p className="text-[11px] text-amber-600 mt-1">Enable SMS above first.</p>}
+          </div>
+
+          {/* Contribution Reminder */}
+          <div className="p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm">💰</span>
+              <h3 className="text-sm font-bold" style={{ color: "#1a202c" }}>Contribution Reminder</h3>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full ml-auto" style={{ background: "#faf5ff", color: "#7c3aed" }}>
+                All Active Shareholders
+              </span>
+            </div>
+            <p className="text-xs text-gray-400 mb-2">
+              Sent to all active shareholders. Variables: <code className="bg-gray-100 px-1 rounded">{"{firstName}"}</code>{" "}
+              <code className="bg-gray-100 px-1 rounded">{"{deadline}"}</code>
+            </p>
+            <textarea
+              className="w-full border rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-100 resize-none"
+              style={{ borderColor: "var(--border)", minHeight: 72 }}
+              value={contribTemplate}
+              onChange={(e) => setContribTemplate(e.target.value)}
+            />
+            {contribResult && (
+              <div className={`mt-2 flex items-center gap-2 text-xs px-3 py-2 rounded-lg ${contribResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                {contribResult.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                {contribResult.msg}
+              </div>
+            )}
+            <button
+              onClick={sendContribReminders}
+              disabled={sendingContrib || !cfg.smsEnabled}
+              className="mt-3 flex items-center gap-1.5 text-xs font-bold px-4 py-2.5 rounded-xl text-white transition-colors disabled:opacity-50"
+              style={{ background: "#7c3aed" }}
+            >
+              {sendingContrib ? <><Loader2 size={12} className="animate-spin" /> Sending…</> : <><BellRing size={12} /> Send Contribution Reminders</>}
+            </button>
+            {!cfg.smsEnabled && <p className="text-[11px] text-amber-600 mt-1">Enable SMS above first.</p>}
+          </div>
+        </div>
+
       </div>
     </div>
   );

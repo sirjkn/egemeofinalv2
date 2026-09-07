@@ -107,7 +107,8 @@ async function findMemberByEmail(email: string): Promise<{
 type Step =
   | { kind: "identifier" }
   | { kind: "set-password";   email: string; name: string; role: "shareholder" | "client" | "investor"; memberId: number }
-  | { kind: "enter-password"; email: string; name: string; role: "admin" | "shareholder" | "client" | "investor" };
+  | { kind: "enter-password"; email: string; name: string; role: "admin" | "shareholder" | "client" | "investor" }
+  | { kind: "reset-otp";      email: string; phone: string; name: string };
 
 // ─── Brand panel ──────────────────────────────────────────────────────────────
 
@@ -613,10 +614,11 @@ function SetPasswordStep({ step, onBack, onLoggedIn, onAlreadyHasAccount, compan
 
 // ─── Step 2b — enter password (returning user) ───────────────────────────────
 
-function EnterPasswordStep({ step, onBack, onLoggedIn, company }: {
+function EnterPasswordStep({ step, onBack, onLoggedIn, onForgotPassword, company }: {
   step: Extract<Step, { kind: "enter-password" }>;
   onBack: () => void;
   onLoggedIn: (session: any, profile: UserProfile) => void;
+  onForgotPassword: () => void;
   company: CompanyDetails | null;
 }) {
   const [pw, setPw]           = useState("");
@@ -700,7 +702,200 @@ function EnterPasswordStep({ step, onBack, onLoggedIn, company }: {
             {loading ? <Loader2 size={15} className="animate-spin" /> : null}
             {loading ? "Signing in…" : "Sign In"}
           </button>
+
+          <button
+            type="button"
+            onClick={onForgotPassword}
+            className="w-full py-2.5 rounded-xl text-sm font-semibold border transition-colors hover:bg-purple-50"
+            style={{ color: "#7c3aed", borderColor: "#c4b5fd" }}>
+            Reset Password
+          </button>
         </form>
+      </div>
+    </PageWrap>
+  );
+}
+
+// ─── Step 2c — OTP Password Reset ────────────────────────────────────────────
+
+function ResetOtpStep({ step, onBack, onDone, company }: {
+  step: Extract<Step, { kind: "reset-otp" }>;
+  onBack: () => void;
+  onDone: () => void;
+  company: CompanyDetails | null;
+}) {
+  const [phase, setPhase]       = useState<"send" | "verify">("send");
+  const [otp, setOtp]           = useState("");
+  const [newPw, setNewPw]       = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [showPw, setShowPw]     = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [err, setErr]           = useState("");
+  const [success, setSuccess]   = useState(false);
+
+  const firstName = step.name.split(" ")[0] || "there";
+  const displayPhone = step.email.replace(/@.*$/, ""); // strip @sacco.co.ke
+
+  const handleSendOtp = async () => {
+    setLoading(true); setErr("");
+    try {
+      const res = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: step.email, phone: step.phone || displayPhone }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Failed to send OTP");
+      setPhase("verify");
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otp.trim() || otp.length !== 6) { setErr("Enter the 6-digit code"); return; }
+    if (newPw.length < 6) { setErr("Password must be at least 6 characters"); return; }
+    if (newPw !== confirmPw) { setErr("Passwords do not match"); return; }
+    setLoading(true); setErr("");
+    try {
+      const res = await fetch("/api/auth/verify-otp-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: step.email, otp: otp.trim(), newPassword: newPw }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Reset failed");
+      setSuccess(true);
+      await new Promise((r) => setTimeout(r, 1800));
+      onDone();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (success) {
+    return (
+      <PageWrap company={company}>
+        <div className="max-w-sm mx-auto w-full flex flex-col items-center gap-4 py-10">
+          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+            <CheckCircle size={28} color="#16a34a" />
+          </div>
+          <h1 className="text-xl font-bold text-center" style={{ color: "#1a202c" }}>Password reset!</h1>
+          <p className="text-sm text-gray-400 text-center">Redirecting to sign in…</p>
+        </div>
+      </PageWrap>
+    );
+  }
+
+  return (
+    <PageWrap company={company}>
+      <div className="max-w-sm mx-auto w-full">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 mb-6 transition-colors">
+          <ArrowLeft size={13} /> Back to Sign In
+        </button>
+
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5 text-2xl"
+          style={{ background: "linear-gradient(135deg, #7c3aed, #6366f1)" }}>
+          🔐
+        </div>
+
+        <h1 className="text-2xl font-bold mb-1" style={{ color: "#1a202c" }}>Reset Password</h1>
+        <p className="text-sm text-gray-400 mb-1">{firstName}</p>
+        <p className="text-xs text-gray-400 mb-7">
+          {phase === "send"
+            ? `We'll send a 6-digit code to your registered phone (${displayPhone}).`
+            : "Enter the code you received and choose a new password."}
+        </p>
+
+        {phase === "send" ? (
+          <div className="space-y-4">
+            {err && <ErrorBox msg={err} />}
+            <button
+              onClick={handleSendOtp}
+              disabled={loading}
+              className="w-full py-3 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60 hover:opacity-90 transition-opacity"
+              style={{ background: "linear-gradient(135deg, #7c3aed, #6366f1)" }}>
+              {loading ? <><Loader2 size={15} className="animate-spin" /> Sending…</> : "Send Reset Code"}
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleVerify} className="space-y-4">
+            {/* OTP input */}
+            <div>
+              <label className="text-xs font-semibold text-gray-500 mb-1.5 block">6-Digit Code</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={otp}
+                onChange={(e) => { setOtp(e.target.value.replace(/\D/g, "")); setErr(""); }}
+                placeholder="000000"
+                autoFocus
+                className={`${inputCls} text-center text-xl tracking-[0.5em] font-bold`}
+                style={inputStyle}
+                onFocus={onFocus} onBlur={onBlur}
+              />
+            </div>
+
+            {/* New password */}
+            <div>
+              <label className="text-xs font-semibold text-gray-500 mb-1.5 block">New Password</label>
+              <div className="relative">
+                <Lock size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+                <input
+                  type={showPw ? "text" : "password"}
+                  value={newPw}
+                  onChange={(e) => { setNewPw(e.target.value); setErr(""); }}
+                  placeholder="At least 6 characters"
+                  className={`${inputCls} pl-10 pr-10`}
+                  style={inputStyle}
+                  onFocus={onFocus} onBlur={onBlur}
+                />
+                <button type="button" onClick={() => setShowPw((v) => !v)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                  {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Confirm */}
+            <div>
+              <label className="text-xs font-semibold text-gray-500 mb-1.5 block">Confirm New Password</label>
+              <div className="relative">
+                <Lock size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+                <input
+                  type={showPw ? "text" : "password"}
+                  value={confirmPw}
+                  onChange={(e) => { setConfirmPw(e.target.value); setErr(""); }}
+                  placeholder="Repeat password"
+                  className={`${inputCls} pl-10`}
+                  style={inputStyle}
+                  onFocus={onFocus} onBlur={onBlur}
+                />
+              </div>
+            </div>
+
+            {err && <ErrorBox msg={err} />}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60 hover:opacity-90 transition-opacity"
+              style={{ background: "linear-gradient(135deg, #7c3aed, #6366f1)" }}>
+              {loading ? <><Loader2 size={15} className="animate-spin" /> Resetting…</> : "Reset Password"}
+            </button>
+
+            <button type="button" onClick={() => { setPhase("send"); setOtp(""); setErr(""); }}
+              className="w-full py-2 text-xs font-semibold text-gray-400 hover:text-gray-600">
+              Didn't receive a code? Resend
+            </button>
+          </form>
+        )}
       </div>
     </PageWrap>
   );
@@ -728,11 +923,27 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (session: any, profile: 
       />
     );
   }
+  if (step.kind === "reset-otp") {
+    return (
+      <ResetOtpStep
+        step={step}
+        onBack={() => setStep({ kind: "enter-password", email: step.email, name: step.name, role: "shareholder" })}
+        onDone={() => setStep({ kind: "identifier" })}
+        company={company}
+      />
+    );
+  }
+  // step.kind === "enter-password"
+  const epStep = step as Extract<Step, { kind: "enter-password" }>;
   return (
     <EnterPasswordStep
-      step={step}
+      step={epStep}
       onBack={() => setStep({ kind: "identifier" })}
       onLoggedIn={onLoggedIn}
+      onForgotPassword={() => {
+        const phone = epStep.email.replace(/@.*$/, ""); // phone number is the email prefix
+        setStep({ kind: "reset-otp", email: epStep.email, phone, name: epStep.name });
+      }}
       company={company}
     />
   );

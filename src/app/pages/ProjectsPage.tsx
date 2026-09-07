@@ -15,7 +15,7 @@ import {
   type Project, type Plot, type PlotPayment, type Shareholder, type Client,
   type PlotAssignPayload, type ProfitDistribution, type PlotCoOwner,
 } from "@/lib/api";
-import { fmtKES, fmtKESFull } from "@/app/shared";
+import { fmtKES, fmtKESFull, fmtDateTime } from "@/app/shared";
 import { getPaymentSettings } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
 import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
@@ -1070,7 +1070,7 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
             {onNavigatePlot ? (
               <button onClick={onNavigatePlot} className="font-bold text-sm hover:underline underline-offset-2 text-left transition-colors hover:opacity-70" style={{ color: "#6366f1" }}>{plot.plot_number}</button>
             ) : (
-              <p className="font-bold text-sm" style={{ color: "#1a202c" }}>{plot.plot_number}</p>
+             <p className="font-bold text-sm" style={{ color: "#1a202c" }}>{plot.plot_number}</p>
             )}
             {onNavigateProject && (plot.project as any)?.project_name ? (
               <button onClick={onNavigateProject} className="text-xs hover:underline underline-offset-1 text-left transition-colors" style={{ color: "#22c55e" }}>{(plot.project as any).project_name}</button>
@@ -1302,7 +1302,7 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                                 }
                               } catch { note = p.notes || "—"; }
                               return {
-                                date: new Date(p.payment_date || p.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+                                date: fmtDateTime(p.payment_date || p.created_at),
                                 amount: Number(p.amount),
                                 method,
                                 ref,
@@ -1351,7 +1351,7 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                         <div key={p.id} className={TABLE_ROW}
                           style={{ gridTemplateColumns: "1fr 1fr 1.2fr 1fr 1fr 1fr 1fr auto", background: i % 2 === 0 ? "#dbeafe" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
                           <span className="text-gray-600">
-                            {new Date(p.payment_date || p.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                            {fmtDateTime(p.payment_date || p.created_at)}
                           </span>
                           <span className="font-bold text-green-600">{fmtKESFull(Number(p.amount))}</span>
                           <span className="text-gray-500 truncate pr-1">{method}</span>
@@ -3511,7 +3511,7 @@ function ProjectDetailView({
                                   return (
                                     <div key={pay.id} className="grid px-3 py-2 items-center text-[10px] border-b last:border-b-0"
                                       style={{ gridTemplateColumns: "1fr 1fr 1.5fr auto", background: pi % 2 === 0 ? "#f8fafc" : "#fff", borderColor: "#f1f5f9" }}>
-                                      <span className="text-gray-500">{new Date(pay.payment_date || pay.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" })}</span>
+                                      <span className="text-gray-500">{fmtDateTime(pay.payment_date || pay.created_at)}</span>
                                       <span className="font-bold text-green-600">{fmtKES(Number(pay.amount))}</span>
                                       <span className="text-gray-400 truncate pr-1">{note}</span>
                                       <div className="flex items-center gap-1">

@@ -76,6 +76,33 @@ export async function loadSmsSettingsFromDb(): Promise<SmsSettings> {
 }
 
 export async function saveSmsSettingsToDb(cfg: SmsSettings): Promise<void> {
-  saveSmsSettings(cfg);
-  await dbSave("sms_settings", cfg);
+  saveSmsSettings(cfg); // always save locally first so it's never lost
+  await dbSave("sms_settings", cfg); // then sync to DB (throws on RLS failure)
+}
+
+// ─── Reminder templates (stored separately for reliability) ──────────────────
+
+export async function loadReminderTemplates(): Promise<{ plot: string; contribution: string }> {
+  const PLOT_DEFAULT = "Dear {firstName}, please make payment for your plot {plotNumber} before deadline {deadline}. Regards, Egemeo Ardhi";
+  const CONTRIB_DEFAULT = "Dear {firstName}, this is a reminder to make your contribution on or before {deadline}. Regards, Egemeo Ardhi";
+  try {
+    const stored = localStorage.getItem("sacco_reminder_templates");
+    const local = stored ? JSON.parse(stored) : {};
+    // Also try DB
+    const db = await dbLoad<{ plot: string; contribution: string }>("reminder_templates").catch(() => null);
+    return {
+      plot: db?.plot ?? local.plot ?? PLOT_DEFAULT,
+      contribution: db?.contribution ?? local.contribution ?? CONTRIB_DEFAULT,
+    };
+  } catch {
+    return {
+      plot: PLOT_DEFAULT,
+      contribution: CONTRIB_DEFAULT,
+    };
+  }
+}
+
+export async function saveReminderTemplates(templates: { plot: string; contribution: string }): Promise<void> {
+  localStorage.setItem("sacco_reminder_templates", JSON.stringify(templates));
+  await dbSave("reminder_templates", templates).catch(() => null); // soft fail
 }
