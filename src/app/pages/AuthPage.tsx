@@ -5,6 +5,7 @@ import {
   CheckCircle, ArrowLeft, User, KeyRound,
 } from "lucide-react";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
+import { sendSms } from "@/lib/sms";
 
 export interface UserProfile {
   id: string;
@@ -739,13 +740,17 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
   const handleSendOtp = async () => {
     setLoading(true); setErr("");
     try {
-      const res = await fetch("/api/auth/send-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: step.email, phone: step.phone || displayPhone }),
-      });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || "Failed to send OTP");
+      // Generate OTP client-side and store in sessionStorage (no server needed)
+      const otp = String(Math.floor(100000 + Math.random() * 900000));
+      const expires = Date.now() + 10 * 60 * 1000;
+      sessionStorage.setItem(`otp_reset_${step.email}`, JSON.stringify({ otp, expires }));
+
+      // Send via SMS Edge Function
+      const phone = step.phone || displayPhone;
+      await sendSms(
+        phone,
+        `Your Egemeo Ardhi password reset code is: ${otp}. Valid for 10 minutes. Do not share this code.`,
+      );
       setPhase("verify");
     } catch (e: any) {
       setErr(e.message);
@@ -761,13 +766,30 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
     if (newPw !== confirmPw) { setErr("Passwords do not match"); return; }
     setLoading(true); setErr("");
     try {
-      const res = await fetch("/api/auth/verify-otp-reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: step.email, otp: otp.trim(), newPassword: newPw }),
+      // 1. Verify OTP from sessionStorage
+      const storedRaw = sessionStorage.getItem(`otp_reset_${step.email}`);
+      if (!storedRaw) throw new Error("Code expired. Please request a new one.");
+      const { otp: savedOtp, expires } = JSON.parse(storedRaw) as { otp: string; expires: number };
+      if (Date.now() > expires) {
+        sessionStorage.removeItem(`otp_reset_${step.email}`);
+        throw new Error("Code expired. Please request a new one.");
+      }
+      if (savedOtp !== otp.trim()) throw new Error("Incorrect code. Please try again.");
+      sessionStorage.removeItem(`otp_reset_${step.email}`);
+
+      // 2. Find user's auth ID from user_profiles
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("id")
+        .eq("email", step.email)
+        .maybeSingle();
+      if (!profile?.id) throw new Error("Account not found. Please contact your admin.");
+
+      // 3. Reset password via Edge Function (no Express needed)
+      const { data: resetData, error: resetErr } = await supabase.functions.invoke("admin-reset-password", {
+        body: { userId: profile.id, newPassword: newPw },
       });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || "Reset failed");
+      if (resetErr || !resetData?.success) throw new Error(resetData?.error || resetErr?.message || "Reset failed");
       setSuccess(true);
       await new Promise((r) => setTimeout(r, 1800));
       onDone();

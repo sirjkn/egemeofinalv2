@@ -208,6 +208,8 @@ function AssignPlotModal({
   const [intType, setIntType] = useState<"fixed" | "percentage">("fixed");
   const [intAmount, setIntAmount] = useState("");
   const [minMonthlyPayment, setMinMonthlyPayment] = useState("");
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [deadline, setDeadline] = useState(todayStr);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const list = assignTo === "shareholder" ? shareholders : clients;
@@ -224,6 +226,7 @@ function AssignPlotModal({
         interest_type: payMode === "installment" ? intType : undefined,
         interest_amount: payMode === "installment" && intAmount ? parseFloat(intAmount) : undefined,
         min_monthly_payment: payMode === "installment" && minMonthlyPayment ? parseFloat(minMonthlyPayment) : undefined,
+        deadline: deadline || todayStr,
       });
       onClose();
     } catch (e: any) { setErr(e.message); }
@@ -323,6 +326,13 @@ function AssignPlotModal({
               </div>
             </>
           )}
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Payment Deadline</label>
+            <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)}
+              className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ borderColor: "var(--border)" }} />
+            <p className="text-xs text-gray-400 mt-0.5">Defaults to today. Reminders will be sent before this date.</p>
+          </div>
           {err && <p className="text-xs text-red-500">{err}</p>}
         </div>
         <div className="px-6 py-4 border-t" style={{ borderColor: "var(--border)" }}>

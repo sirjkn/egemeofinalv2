@@ -889,6 +889,7 @@ export interface Plot {
   interest_amount: number | null;
   min_monthly_payment: number | null;
   paid_amount: number;
+  deadline: string | null;
   created_at: string;
   shareholder?: any;
   client?: any;
@@ -903,6 +904,7 @@ export interface PlotAssignPayload {
   interest_type?: "fixed" | "percentage";
   interest_amount?: number;
   min_monthly_payment?: number;
+  deadline?: string;
 }
 
 export const projectsApi = {
@@ -1029,6 +1031,7 @@ export const plotsApi = {
       interest_type: p.interest_type ?? null,
       interest_amount: p.interest_amount ?? null,
       min_monthly_payment: p.min_monthly_payment ?? null,
+      deadline: p.deadline ?? null,
     }).eq("id", plot_id).select().single();
     if (error) throw new Error(error.message);
     return data;

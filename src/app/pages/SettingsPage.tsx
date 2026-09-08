@@ -5285,43 +5285,69 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
 
   const sendDeadline = () => {
     const today = new Date();
-    // deadline = 10th of next month
-    return new Date(today.getFullYear(), today.getMonth() + 1, 10)
-      .toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    const day = today.getDate();
+    // Day 1-10: billing month is previous month → deadline is 10th of current month
+    // Day 11+:  billing month is current month  → deadline is 10th of next month
+    const deadlineDate = day <= 10
+      ? new Date(today.getFullYear(), today.getMonth(), 10)
+      : new Date(today.getFullYear(), today.getMonth() + 1, 10);
+    return deadlineDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  };
+
+  // Extract phone from member record; fall back to user_profiles login email ({phone}@sacco.co.ke)
+  const resolvePhone = async (memberId: number, directPhone: string | null | undefined): Promise<string | null> => {
+    if (directPhone?.trim()) return directPhone.trim();
+    // No role filter — just match by member_id; strip domain to recover phone
+    const { data: up } = await supabase
+      .from("user_profiles")
+      .select("email")
+      .eq("member_id", memberId)
+      .maybeSingle();
+    if (!up?.email) return null;
+    const derived = up.email.replace(/@.*$/, ""); // e.g. "0712345678" — keep the leading 0
+    return derived || null;
   };
 
   const sendPlotReminders = async () => {
     setSendingPlot(true); setPlotResult(null);
     try {
-      // Fetch all plots with outstanding balances and their owners
       const { data: plots } = await supabase
         .from("plots")
-        .select("id, plot_number, price, paid_amount, assigned_to, assigned_type")
-        .not("assigned_to", "is", null)
+        .select("id, plot_number, price, paid_amount, assigned_to_id, assigned_to_type, deadline")
+        .not("assigned_to_id", "is", null)
         .gt("price", 0);
 
       if (!plots?.length) { setPlotResult({ ok: true, msg: "No assigned plots found." }); return; }
 
-      let sent = 0; let failed = 0;
-      const deadline = sendDeadline();
+      let sent = 0; let noPhone = 0; let smsFailed = 0;
 
       for (const plot of plots) {
         const balance = Number(plot.price) - Number(plot.paid_amount ?? 0);
         if (balance <= 0) continue;
-        const table = plot.assigned_type === "shareholder" ? "shareholders" : "clients";
-        const { data: member } = await supabase.from(table).select("name, phone").eq("id", plot.assigned_to).maybeSingle();
-        if (!member?.phone) { failed++; continue; }
+        const role = (plot.assigned_to_type === "shareholder" ? "shareholder" : plot.assigned_to_type === "investor" ? "investor" : "client") as "shareholder" | "client" | "investor";
+        const table = role === "shareholder" ? "shareholders" : role === "investor" ? "investors" : "clients";
+        const { data: member } = await supabase.from(table).select("id, name, phone").eq("id", plot.assigned_to_id).maybeSingle();
+        if (!member) { noPhone++; continue; }
+        const phone = await resolvePhone(member.id, member.phone);
+        if (!phone) { noPhone++; continue; }
         const firstName = member.name.split(" ")[0];
+        // Use per-plot deadline if set, otherwise fall back to the calculated billing deadline
+        const deadlineLabel = plot.deadline
+          ? new Date(plot.deadline).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
+          : sendDeadline();
         const msg = plotTemplate
           .replace("{firstName}", firstName)
           .replace("{plotNumber}", plot.plot_number ?? String(plot.id))
-          .replace("{deadline}", deadline);
+          .replace("{deadline}", deadlineLabel);
         try {
-          await sendSms(member.phone, msg, undefined, cfg);
+          await sendSms(phone, msg, undefined, cfg);
           sent++;
-        } catch { failed++; }
+        } catch { smsFailed++; }
       }
-      setPlotResult({ ok: true, msg: `Sent ${sent} reminder${sent !== 1 ? "s" : ""}.${failed > 0 ? ` ${failed} failed (no phone).` : ""}` });
+      const parts = [`Sent ${sent} reminder${sent !== 1 ? "s" : ""}.`];
+      if (noPhone > 0) parts.push(`${noPhone} skipped (no phone).`);
+      if (smsFailed > 0) parts.push(`${smsFailed} SMS failed — check SMS settings.`);
+      setPlotResult({ ok: true, msg: parts.join(" ") });
     } catch (e: any) {
       setPlotResult({ ok: false, msg: e.message });
     } finally { setSendingPlot(false); }
@@ -5332,26 +5358,30 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
     try {
       const { data: shareholders } = await supabase
         .from("shareholders")
-        .select("name, phone")
-        .eq("status", "active");
+        .select("id, name, phone")
+        .eq("status", "Active");
 
       if (!shareholders?.length) { setContribResult({ ok: true, msg: "No active shareholders found." }); return; }
 
-      let sent = 0; let failed = 0;
+      let sent = 0; let noPhone = 0; let smsFailed = 0;
       const deadline = sendDeadline();
 
       for (const sh of shareholders) {
-        if (!sh.phone) { failed++; continue; }
+        const phone = await resolvePhone(sh.id, sh.phone);
+        if (!phone) { noPhone++; continue; }
         const firstName = sh.name.split(" ")[0];
         const msg = contribTemplate
           .replace("{firstName}", firstName)
           .replace("{deadline}", deadline);
         try {
-          await sendSms(sh.phone, msg, undefined, cfg);
+          await sendSms(phone, msg, undefined, cfg);
           sent++;
-        } catch { failed++; }
+        } catch { smsFailed++; }
       }
-      setContribResult({ ok: true, msg: `Sent ${sent} reminder${sent !== 1 ? "s" : ""} to active shareholders.${failed > 0 ? ` ${failed} skipped (no phone).` : ""}` });
+      const cParts = [`Sent ${sent} reminder${sent !== 1 ? "s" : ""} to active shareholders.`];
+      if (noPhone > 0) cParts.push(`${noPhone} skipped (no phone).`);
+      if (smsFailed > 0) cParts.push(`${smsFailed} SMS failed — check SMS settings.`);
+      setContribResult({ ok: true, msg: cParts.join(" ") });
     } catch (e: any) {
       setContribResult({ ok: false, msg: e.message });
     } finally { setSendingContrib(false); }
@@ -5370,10 +5400,17 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
     },
     {
       id: SMS_TRIGGERS.contribReceipt,
-      label: "Payment Received", icon: "💰",
+      label: "Contribution Payment Received", icon: "💰",
       desc: "Sent when a contribution payment is recorded",
       vars: ["name", "amount", "month", "ref"],
       example: { name: "John", amount: "KES 5,000", month: "January 2025", ref: " Ref: QHX4ABC123." },
+    },
+    {
+      id: SMS_TRIGGERS.plotReceipt,
+      label: "Plot Payment Received Confirmation", icon: "🏡",
+      desc: "Sent when a plot payment is recorded",
+      vars: ["name", "amount", "plotNo", "ref"],
+      example: { name: "John", amount: "KES 50,000", plotNo: "A-01", ref: " Ref: QHX4ABC123." },
     },
     {
       id: SMS_TRIGGERS.plotAssigned,
@@ -5381,13 +5418,6 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
       desc: "Sent when a plot is assigned to a member",
       vars: ["name", "plotNo", "project", "amount"],
       example: { name: "John", plotNo: "A-01", project: "Phase 1", amount: "KES 250,000" },
-    },
-    {
-      id: SMS_TRIGGERS.passwordReminder,
-      label: "Password Reminder", icon: "🔑",
-      desc: "Sent via More Actions on a member profile",
-      vars: ["name", "phone"],
-      example: { name: "John", phone: "0712345678" },
     },
     {
       id: SMS_TRIGGERS.reminder5d,

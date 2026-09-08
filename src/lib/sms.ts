@@ -25,6 +25,7 @@ export const SMS_TRIGGERS = {
   newUser:          "sms_new_user",
   contribReceipt:   "sms_contrib_receipt",
   plotAssigned:     "sms_plot_assigned",
+  plotReceipt:      "sms_plot_receipt",
   reminder5d:       "sms_reminder_5d",
   reminder2d:       "sms_reminder_2d",
   reminder1d:       "sms_reminder_1d",
@@ -39,6 +40,8 @@ export const DEFAULT_TEMPLATES: Record<string, string> = {
     "Welcome to Egemeo Ardhi, {name}! Your login phone: {phone}. Please login to the system and create a new password. Thank you",
   sms_contrib_receipt:
     "Dear {name}, your contribution of {amount} for {month} has been received. Thank you. - Egemeo Ardhi ",
+  sms_plot_receipt:
+    "Dear {name}, your plot payment of {amount} for plot {plotNo} has been received.{ref} Thank you. - Egemeo Ardhi",
   sms_plot_assigned:
     "Dear {name}, plot {plotNo} in {project} has been assigned to you. Total: {amount}. Welcome! - Egemeo Ardhi ",
   sms_password_reminder:
@@ -150,11 +153,7 @@ export async function sendSms(
       "apikey": publicAnonKey,
       "Authorization": `Bearer ${publicAnonKey}`,
     },
-    body: JSON.stringify({
-      to,
-      message,
-      providerConfig: s.providerConfig,
-    }),
+    body: JSON.stringify({ to, message, providerConfig: s.providerConfig }),
   });
   const data = await res.json().catch(() => ({ ok: false, error: res.statusText }));
   if (!res.ok || !data.ok) throw new Error(data.error ?? `SMS failed (${res.status})`);
@@ -188,6 +187,12 @@ export const smsTemplates = {
 
   plotAssigned: (name: string, plotNo: string, project: string, amount: string) =>
     interpolate(getTpl(SMS_TRIGGERS.plotAssigned), { name, plotNo, project, amount }),
+
+  plotReceipt: (name: string, amount: string, plotNo: string, ref?: string) =>
+    interpolate(getTpl(SMS_TRIGGERS.plotReceipt), {
+      name, amount, plotNo,
+      ref: ref ? ` Ref: ${ref}.` : "",
+    }),
 
   reminder: (name: string, month: string, daysUntil: number) => {
     const id = daysUntil === 0 ? SMS_TRIGGERS.reminderToday

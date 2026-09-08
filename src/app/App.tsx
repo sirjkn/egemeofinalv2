@@ -1490,6 +1490,7 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
       note: extras?.comment ?? "",
     });
     await plotsApi.recordPayment(payTarget.id, amt, structuredNotes);
+    if (payerPhone) sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amt.toLocaleString()}`, payTarget.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
     logActivity({ category: "plot", action: "payment", description: `Plot ${payTarget.plot_number} payment of KES ${amt.toLocaleString()} recorded for ${payerName}`, actor_name: memberName, meta: { plot_id: payTarget.id, amount: amt } });
     if (method === "mpesa") {
       const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payTarget.plot_number}`;
@@ -3221,6 +3222,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       note: extras?.comment ?? "",
     });
     await plotsApi.recordPayment(plotPayTarget.id, parsedPlotAmt, structuredNotes, today);
+    if (payerPhone) sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${parsedPlotAmt.toLocaleString()}`, plotPayTarget.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
     logActivity({ category: "plot", action: "payment", description: `Plot ${plotPayTarget.plot_number} payment of KES ${parsedPlotAmt.toLocaleString()} via ${method} by ${payerName}`, meta: { plot_id: plotPayTarget.id, amount: parsedPlotAmt, method } });
     if (method === "mpesa") {
       const baseComment = `PHONE:${payerPhone}|ACCOUNT:${plotPayTarget.plot_number}`;
@@ -4353,6 +4355,7 @@ function MyPlotsPage() {
             note: extras?.comment ?? "",
           });
           await plotsApi.recordPayment(payPlot.id, amount, structuredNotes, today);
+          if (payerPhone) sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amount.toLocaleString()}`, payPlot.plot_number, reference ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
           if (method === "mpesa" && reference) {
             const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payPlot.plot_number}`;
             await paymentsApi.create({
@@ -7419,6 +7422,109 @@ export default function App() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // ── Automated plot deadline reminders (5d / 2d / 1d / due today) ────────────
+  useEffect(() => {
+    if (!authReady) return;
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
+    const storageKey = `sacco_plot_rem_last_${todayStr}`;
+    // Only fire once per calendar day
+    if (localStorage.getItem(storageKey)) return;
+
+    const run = async () => {
+      try {
+        const { data: plots } = await supabase
+          .from("plots")
+          .select("id, plot_number, price, paid_amount, assigned_to_id, assigned_to_type, deadline")
+          .not("assigned_to_id", "is", null)
+          .not("deadline", "is", null)
+          .gt("price", 0);
+
+        if (!plots?.length) return;
+
+        const { getSmsSettings, sendSms: _sendSms } = await import("@/lib/sms");
+        const cfg = getSmsSettings();
+        if (!cfg.smsEnabled) return;
+
+        const resolvePhone = async (memberId: number, directPhone: string | null | undefined): Promise<string | null> => {
+          if (directPhone?.trim()) return directPhone.trim();
+          const { data: up } = await supabase
+            .from("user_profiles")
+            .select("email")
+            .eq("member_id", memberId)
+            .maybeSingle();
+          if (!up?.email) return null;
+          return up.email.replace(/@.*$/, "") || null;
+        };
+
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const THRESHOLDS = [5, 2, 1, 0];
+
+        for (const plot of plots) {
+          const balance = Number(plot.price) - Number(plot.paid_amount ?? 0);
+          if (balance <= 0 || !plot.deadline) continue;
+
+          const deadlineDate = new Date(plot.deadline);
+          deadlineDate.setHours(23, 59, 59, 0);
+          const daysLeft = Math.round((deadlineDate.getTime() - today.setHours(0, 0, 0, 0)) / msPerDay);
+
+          if (!THRESHOLDS.includes(daysLeft)) continue;
+
+          // Per-plot per-day per-threshold dedup
+          const sentKey = `sacco_plot_rem_${plot.id}_${daysLeft}d_${todayStr}`;
+          if (localStorage.getItem(sentKey)) continue;
+
+          const role = plot.assigned_to_type === "shareholder" ? "shareholders" : "clients";
+          const { data: member } = await supabase
+            .from(role)
+            .select("id, name, phone")
+            .eq("id", plot.assigned_to_id)
+            .maybeSingle();
+          if (!member) continue;
+
+          const phone = await resolvePhone(member.id, member.phone);
+          if (!phone) continue;
+
+          const firstName = member.name.split(" ")[0];
+          const deadlineLabel = deadlineDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+          const triggerMap: Record<number, string> = {
+            5: "sms_reminder_5d",
+            2: "sms_reminder_2d",
+            1: "sms_reminder_1d",
+            0: "sms_reminder_0d",
+          };
+          const triggerId = triggerMap[daysLeft];
+          if (cfg.smsTriggers[triggerId] === false) continue;
+
+          const templateMap: Record<number, string> = {
+            5: "Dear {firstName}, your plot {plotNumber} payment is due in 5 days ({deadline}). Please pay to avoid late fees. - Egemeo Ardhi",
+            2: "Dear {firstName}, your plot {plotNumber} payment is due in 2 days ({deadline}). Please pay to avoid late fees. - Egemeo Ardhi",
+            1: "Dear {firstName}, your plot {plotNumber} payment is due TOMORROW ({deadline}). Please pay today. - Egemeo Ardhi",
+            0: "Dear {firstName}, your plot {plotNumber} payment is due TODAY ({deadline}). Pay now to avoid being marked late. - Egemeo Ardhi",
+          };
+          // Use custom template from settings if available, otherwise fallback
+          const tplKey = `plot_deadline_reminder_${daysLeft}d`;
+          const customTpl = cfg.messageTemplates?.[tplKey];
+          const message = (customTpl?.trim() || templateMap[daysLeft])
+            .replace("{firstName}", firstName)
+            .replace("{plotNumber}", plot.plot_number ?? String(plot.id))
+            .replace("{deadline}", deadlineLabel);
+
+          try {
+            await _sendSms(phone, message, triggerId, cfg);
+            localStorage.setItem(sentKey, "1");
+          } catch { /* silent — don't block on individual failures */ }
+        }
+        localStorage.setItem(storageKey, "1");
+      } catch { /* silent */ }
+    };
+
+    // Delay slightly to not block the initial render
+    const t = setTimeout(run, 5000);
+    return () => clearTimeout(t);
+  }, [authReady]);
 
   const handleLoggedIn = async (s: any, p: UserProfile) => {
     setSession(s);
