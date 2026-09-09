@@ -1300,12 +1300,11 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                           onClick={async () => {
                             const co = await getCompanyDetails();
                             const rows = payments.map((p) => {
-                              let method = "—", ref = "—", note = "—", paidBy = "—", phone = "—";
+                              let method = "—", note = "—", paidBy = "—", phone = "—";
                               try {
                                 const parsed = JSON.parse(p.notes ?? "");
                                 if (parsed && typeof parsed === "object") {
                                   method = parsed.method || "—";
-                                  ref = parsed.ref || "—";
                                   note = parsed.note || "—";
                                   paidBy = parsed.paidBy || "—";
                                   phone = parsed.phone || "—";
@@ -1315,7 +1314,7 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                                 date: fmtDateTime(p.payment_date || p.created_at),
                                 amount: Number(p.amount),
                                 method,
-                                ref,
+                                ref: "",
                                 paidBy,
                                 phone,
                                 note,
@@ -1335,23 +1334,21 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                           <FileDown size={12} /> Export PDF
                         </button>
                       </div>
-                      <div className={TABLE_HEADER} style={{ background: "#1e3a5f", gridTemplateColumns: "1fr 1fr 1.2fr 1fr 1fr 1fr 1fr auto", fontSize: "10px" }}>
+                      <div className={TABLE_HEADER} style={{ background: "#1e3a5f", gridTemplateColumns: "1fr 1fr 1.2fr 1fr 1fr 1fr auto", fontSize: "10px" }}>
                         <span>Date</span>
                         <span>Amount</span>
                         <span>PMTMethod</span>
-                        <span>TXNCode</span>
                         <span>Paid By</span>
                         <span>Phone</span>
                         <span>Comments</span>
                         <span />
                       </div>
                       {payments.map((p, i) => {
-                        let method = "—", ref = "—", note = p.notes || "—", paidBy = "—", phone = "—";
+                        let method = "—", note = p.notes || "—", paidBy = "—", phone = "—";
                         try {
                           const parsed = JSON.parse(p.notes ?? "");
                           if (parsed && typeof parsed === "object") {
                             method = parsed.method || "—";
-                            ref = parsed.ref || "—";
                             note = parsed.note || "—";
                             paidBy = parsed.paidBy || "—";
                             phone = parsed.phone || "—";
@@ -1359,13 +1356,12 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                         } catch { /* plain-text notes from old records */ }
                         return (
                         <div key={p.id} className={TABLE_ROW}
-                          style={{ gridTemplateColumns: "1fr 1fr 1.2fr 1fr 1fr 1fr 1fr auto", background: i % 2 === 0 ? "#dbeafe" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
+                          style={{ gridTemplateColumns: "1fr 1fr 1.2fr 1fr 1fr 1fr auto", background: i % 2 === 0 ? "#dbeafe" : "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
                           <span className="text-gray-600">
                             {fmtDateTime(p.payment_date || p.created_at)}
                           </span>
                           <span className="font-bold text-green-600">{fmtKESFull(Number(p.amount))}</span>
                           <span className="text-gray-500 truncate pr-1">{method}</span>
-                          <span className="text-gray-500 truncate pr-1">{ref}</span>
                           <span className="text-gray-500 truncate pr-1">{paidBy}</span>
                           <span className="text-gray-500 truncate pr-1">{phone}</span>
                           <span className="text-gray-500 truncate pr-2">{note}</span>
@@ -2755,10 +2751,23 @@ function ProjectDetailView({
     // Load plots
     try {
       const p = await plotsApi.listByProject(project.id);
-      setPlots(p);
+
+      // Reconcile paid_amount against actual plot_payments so reassigned plots
+      // always show their full payment history rather than the reset value.
+      const assignedIds = p.filter((pl) => pl.assigned_to_id != null).map((pl) => pl.id);
+      let reconciled = p;
+      if (assignedIds.length > 0) {
+        const updates = await plotsApi.reconcilePaidAmounts(assignedIds).catch(() => []);
+        if (updates.length > 0) {
+          const map = new Map(updates.map((u) => [u.id, u.paid_amount]));
+          reconciled = p.map((pl) => map.has(pl.id) ? { ...pl, paid_amount: map.get(pl.id)! } : pl);
+        }
+      }
+      setPlots(reconciled);
+
       // Load co-owners for all plots
       const coMap: Record<number, PlotCoOwner[]> = {};
-      await Promise.all(p.map(async (plot) => {
+      await Promise.all(reconciled.map(async (plot) => {
         try {
           const co = await plotCoOwnersApi.listByPlot(plot.id);
           if (co.length > 0) coMap[plot.id] = co;

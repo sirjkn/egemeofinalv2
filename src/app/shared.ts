@@ -20,13 +20,22 @@ export function fmtKESFull(n: number) {
 }
 export function fmtDate(iso: string) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
 }
 
 export function fmtDateTime(iso: string) {
   if (!iso) return "—";
   const d = new Date(iso);
-  const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
-  return `${date} · ${time}`;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  let h = d.getHours();
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${dd}/${mm}/${yyyy} ${String(h).padStart(2, "0")}:${min} ${ampm}`;
 }

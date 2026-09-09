@@ -1022,6 +1022,14 @@ export const plotsApi = {
   },
 
   assign: async (plot_id: number, p: PlotAssignPayload): Promise<Plot> => {
+    // Recalculate paid_amount from existing payment records so historical
+    // payments are reflected immediately after a reassignment
+    const { data: existingPmts } = await supabase
+      .from("plot_payments")
+      .select("amount")
+      .eq("plot_id", plot_id);
+    const restoredPaid = (existingPmts ?? []).reduce((sum, r) => sum + Number(r.amount), 0);
+
     const { data, error } = await supabase.from("plots").update({
       status: "assigned",
       assigned_to_id: p.assigned_to_id,
@@ -1032,6 +1040,7 @@ export const plotsApi = {
       interest_amount: p.interest_amount ?? null,
       min_monthly_payment: p.min_monthly_payment ?? null,
       deadline: p.deadline ?? null,
+      paid_amount: restoredPaid,
     }).eq("id", plot_id).select().single();
     if (error) throw new Error(error.message);
     return data;
@@ -1086,6 +1095,30 @@ export const plotsApi = {
       fixed++;
     }
     return fixed;
+  },
+
+  // Reconcile paid_amount for a list of plot IDs against actual plot_payments sums.
+  // Returns updated Plot rows so the UI can patch local state without a full reload.
+  reconcilePaidAmounts: async (plotIds: number[]): Promise<{ id: number; paid_amount: number }[]> => {
+    if (!plotIds.length) return [];
+    const { data: pmts } = await supabase
+      .from("plot_payments")
+      .select("plot_id, amount")
+      .in("plot_id", plotIds);
+    // Tally sums from plot_payments
+    const sums: Record<number, number> = {};
+    for (const id of plotIds) sums[id] = 0;
+    for (const r of pmts ?? []) sums[Number(r.plot_id)] = (sums[Number(r.plot_id)] ?? 0) + Number(r.amount);
+    // Batch-update any plot whose stored paid_amount differs
+    const updates: { id: number; paid_amount: number }[] = [];
+    await Promise.all(
+      Object.entries(sums).map(async ([idStr, total]) => {
+        const id = Number(idStr);
+        await supabase.from("plots").update({ paid_amount: total }).eq("id", id);
+        updates.push({ id, paid_amount: total });
+      }),
+    );
+    return updates;
   },
 };
 

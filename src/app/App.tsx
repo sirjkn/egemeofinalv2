@@ -3289,28 +3289,41 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         setCumulativeSavings(cum.length > 12 ? cum.slice(-12) : cum);
       }
 
-      const plots = plotRes.data ?? [];
       const pays  = payRes.data  ?? [];
 
-      // For clients/investors: sum plot payments made this month
+      // For clients/investors: reconcile paid_amount from actual plot_payments records
+      // so this dashboard is always correct regardless of whether admin has opened the project.
+      let plots = plotRes.data ?? [];
       if (!isSH && plots.length > 0) {
-        const plotIds = plots.map((pl: any) => pl.id);
-        const monthStart = new Date(year, month - 1, 1).toISOString().slice(0, 10);
-        const monthEnd   = new Date(year, month, 0).toISOString().slice(0, 10);
-        const { data: ppMon } = await supabase
+        const plotIds = plots.map((pl: any) => pl.id as number);
+        const { data: allPmts } = await supabase
           .from("plot_payments")
-          .select("amount")
-          .in("plot_id", plotIds)
-          .gte("payment_date", monthStart)
-          .lte("payment_date", monthEnd);
-        setThisMonthPlotPaid((ppMon ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0));
+          .select("plot_id, amount")
+          .in("plot_id", plotIds);
+        if (allPmts?.length) {
+          // Tally totals per plot
+          const sums: Record<number, number> = {};
+          for (const id of plotIds) sums[id] = 0;
+          for (const r of allPmts) sums[Number(r.plot_id)] = (sums[Number(r.plot_id)] ?? 0) + Number(r.amount);
+          // Patch local plot data with correct paid_amount; update DB in background
+          plots = plots.map((pl: any) => {
+            const correct = sums[pl.id] ?? Number(pl.paid_amount ?? 0);
+            if (correct !== Number(pl.paid_amount ?? 0)) {
+              supabase.from("plots").update({ paid_amount: correct }).eq("id", pl.id).then(() => {});
+            }
+            return { ...pl, paid_amount: correct };
+          });
+        }
+        // "Total Paid" = sum of reconciled paid_amount across all plots
+        const totalPaidPlots = plots.reduce((s: number, pl: any) => s + Number(pl.paid_amount ?? 0), 0);
+        setThisMonthPlotPaid(totalPaidPlots);
       }
 
       plots.slice(0, 2).forEach((pl: any) => acts.push({ key: "pl"+pl.id, type: "plot", label: "Plot allocated", amount: Number(pl.price), date: "" }));
       pays.slice(0, 3).forEach((p: any)  => acts.push({ key: "py"+p.id,  type: "payment", label: p.purpose ?? "Payment", amount: Number(p.amount), date: p.created_at }));
       acts.sort((a, b) => (b.date > a.date ? 1 : -1));
 
-      // Plot payment progress
+      // Plot payment progress (use reconciled plots data)
       setPlotsData(plots.map((pl: any) => {
         const price = Number(pl.price) || 0;
         const paid  = Math.min(Number(pl.paid_amount) || 0, price);
@@ -3456,7 +3469,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             <div className="bg-white rounded-xl p-4 border" style={{ borderColor: "var(--card-border)" }}>
               <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#fff7ed", color: "#f97316" }}><Calendar size={17} /></div>
               <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(isSH ? stats.thisMonth : thisMonthPlotPaid)}</div>
-              <div className="text-xs font-semibold" style={{ color: "#f97316" }}>This Month</div>
+              <div className="text-xs font-semibold" style={{ color: "#f97316" }}>{isSH ? "This Month" : "Total Paid"}</div>
               <div className="text-xs text-gray-400">{isSH ? "Contribution" : "Plot payment"}</div>
             </div>
             {isSH && (
@@ -3471,13 +3484,13 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             )}
             {/* Plot Payments stat — clients/investors only, paired with This Month */}
             {!isSH && (() => {
-              const totalPaid = plotsData.reduce((s, p) => s + p.paid, 0);
+              const totalRemaining = plotsData.reduce((s, p) => s + p.remaining, 0);
               const done = plotsData.filter((p) => p.pct >= 100).length;
               return (
                 <div className="bg-white rounded-xl p-4 border" style={{ borderColor: "var(--card-border)" }}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#ecfdf5", color: "#059669" }}><MapPin size={17} /></div>
-                  <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(totalPaid)}</div>
-                  <div className="text-xs font-semibold" style={{ color: "#059669" }}>Plot Payments</div>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#fef3c7", color: "#d97706" }}><MapPin size={17} /></div>
+                  <div className="text-xl font-bold" style={{ color: totalRemaining > 0 ? "#d97706" : "#059669" }}>{fmtKESFull(totalRemaining)}</div>
+                  <div className="text-xs font-semibold" style={{ color: totalRemaining > 0 ? "#d97706" : "#059669" }}>Balance Due</div>
                   <div className="text-xs text-gray-400">{plotsData.length} plot{plotsData.length !== 1 ? "s" : ""}{done > 0 ? `, ${done} complete` : ""}</div>
                 </div>
               );
@@ -4913,17 +4926,10 @@ function MpesaTransactionsPage() {
               <div className="flex items-center justify-center h-40"><p className="text-sm text-gray-400">No M-Pesa payments recorded yet.</p></div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs min-w-[750px]">
+                <table className="w-full text-xs min-w-[850px]">
                   <thead>
                     <tr style={{ background: "#1e3a5f" }}>
-                      {[
-                        { label: "Date",            tip: "From M-Pesa" },
-                        { label: "Amount",          tip: "From M-Pesa" },
-                        { label: "Name",            tip: "From M-Pesa message" },
-                        { label: "Number",          tip: "From M-Pesa message" },
-                        { label: "Notes (Account)", tip: "" },
-                        { label: "Paid For",        tip: "" },
-                      ].map(({ label }) => (
+                      {["Date", "Amount", "TXN Code", "Name", "Number", "Notes (Account)", "Paid For"].map((label) => (
                         <th key={label} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap text-white text-[11px]">{label}</th>
                       ))}
                     </tr>
@@ -4939,26 +4945,24 @@ function MpesaTransactionsPage() {
                       return (
                         <tr key={p.id} className="border-b hover:bg-sky-50 transition-colors"
                           style={{ borderColor: "#e2e8f0", background: i % 2 === 0 ? "#dbeafe" : "#ffffff" }}>
-                          {/* Date — from M-Pesa */}
                           <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{fmtDate(p.date_paid)}</td>
-                          {/* Amount — from M-Pesa */}
                           <td className="px-3 py-2.5 font-bold whitespace-nowrap" style={{ color: "#059669" }}>
                             Ksh {Number(p.amount).toLocaleString("en-KE")}
                           </td>
-                          {/* Name — from M-Pesa message */}
+                          {/* TXN Code — Safaricom confirmation code e.g. UI86E5E4VB */}
+                          <td className="px-3 py-2.5 font-mono font-bold text-[11px] whitespace-nowrap" style={{ color: "#0369a1" }}>
+                            {p.payment_id || "—"}
+                          </td>
                           <td className="px-3 py-2.5" style={{ color: "#1a202c" }}>
                             <div className="font-semibold">{p.paid_by || "—"}</div>
                             {p.shareholder && (
                               <div className="text-[10px] text-gray-400">EW#{p.shareholder.member_number}</div>
                             )}
                           </td>
-                          {/* Number — from M-Pesa message */}
                           <td className="px-3 py-2.5 font-mono text-[11px] text-gray-600 whitespace-nowrap">
                             {phone || "—"}
                           </td>
-                          {/* Notes (Account) */}
                           <td className="px-3 py-2.5 text-gray-500 text-[11px]">{acct || "—"}</td>
-                          {/* Paid For */}
                           <td className="px-3 py-2.5 text-gray-500">{p.purpose ?? "—"}</td>
                         </tr>
                       );
@@ -4967,11 +4971,10 @@ function MpesaTransactionsPage() {
                   <tfoot>
                     <tr style={{ background: "#dbeafe", borderTop: "2px solid #93c5fd" }}>
                       <td className="px-3 py-2.5 font-bold text-xs" style={{ color: "#1e3a5f" }}>TOTAL</td>
-                      <td />
                       <td className="px-3 py-2.5 font-extrabold text-xs whitespace-nowrap" style={{ color: "#059669" }}>
                         Ksh {localTotal.toLocaleString("en-KE")}
                       </td>
-                      <td colSpan={4} className="px-3 py-2.5 text-[11px] text-gray-400">{localFiltered.length} record{localFiltered.length !== 1 ? "s" : ""}</td>
+                      <td colSpan={5} className="px-3 py-2.5 text-[11px] text-gray-400">{localFiltered.length} record{localFiltered.length !== 1 ? "s" : ""}</td>
                     </tr>
                   </tfoot>
                 </table>

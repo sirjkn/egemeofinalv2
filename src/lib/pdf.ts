@@ -555,12 +555,11 @@ export async function downloadPlotPaymentHistoryPdf(
 
   autoTable(doc, {
     startY,
-    head: [["Date", "Amount (KES)", "Method", "TXN Code", "Paid By", "Phone", "Comments"]],
+    head: [["Date", "Amount (KES)", "Method", "Paid By", "Phone", "Comments"]],
     body: rows.map((r) => [
       r.date || "—",
       Number(r.amount).toLocaleString("en-KE"),
       r.method || "—",
-      r.ref || "—",
       r.paidBy || "—",
       r.phone || "—",
       r.note || "—",
@@ -568,7 +567,7 @@ export async function downloadPlotPaymentHistoryPdf(
     foot: [[
       `${rows.length} payment${rows.length !== 1 ? "s" : ""}`,
       Number(totalPaid).toLocaleString("en-KE"),
-      "", "", "", "", "",
+      "", "", "", "",
     ]],
     headStyles: { fillColor: ACCENT, textColor: 255, fontStyle: "bold", fontSize: 7.5 },
     footStyles: { fillColor: [240, 253, 244], textColor: [22, 163, 74] as [number, number, number], fontStyle: "bold", fontSize: 8 },
