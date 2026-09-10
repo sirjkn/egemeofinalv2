@@ -1,4 +1,5 @@
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
+import { supabase } from "@/lib/supabase";
 
 const SMS_KEY = "sacco_sms_settings";
 const EDGE_BASE = `https://${projectId}.supabase.co/functions/v1`;
@@ -115,6 +116,33 @@ export function saveSmsSettings(s: SmsSettings) {
   localStorage.setItem(SMS_KEY, JSON.stringify(s));
 }
 
+/** Load from DB and cache to localStorage. Safe to call from any device/user. */
+export async function loadSmsSettingsFromSupabase(): Promise<SmsSettings> {
+  try {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "sms_settings")
+      .maybeSingle();
+    if (data?.value) {
+      const merged = mergeSmsSettings(data.value);
+      saveSmsSettings(merged);
+      return merged;
+    }
+  } catch { /* fall through */ }
+  return getSmsSettings();
+}
+
+function credentialsMissing(s: SmsSettings): boolean {
+  const p = s.providerConfig.provider;
+  if (p === "oramobile") {
+    const ora = s.providerConfig.oramobile;
+    return (!ora.apiKey && (!ora.username || !ora.password));
+  }
+  const at = s.providerConfig.africastalking;
+  return (!at.apiKey || !at.username);
+}
+
 // ─── Phone normalisation ──────────────────────────────────────────────────────
 
 function normalisePhone(phone: string): string {
@@ -133,12 +161,16 @@ export async function sendSms(
   triggerId?: string,
   cfg?: SmsSettings,
 ): Promise<void> {
-  const s = cfg ?? getSmsSettings();
+  // Use supplied cfg, or local cache — if credentials are missing, fetch from DB
+  let s = cfg ?? getSmsSettings();
+  if (credentialsMissing(s)) {
+    s = await loadSmsSettingsFromSupabase();
+  }
   if (!s.smsEnabled) throw new Error("SMS is disabled. Enable it in Settings → SMS Notifications.");
   const p = s.providerConfig.provider;
   if (p === "oramobile") {
     const ora = s.providerConfig.oramobile;
-    if (!ora.username || !ora.password) throw new Error("Oramobile credentials not configured. Go to Settings → SMS Notifications.");
+    if (!ora.apiKey && (!ora.username || !ora.password)) throw new Error("Oramobile credentials not configured. Go to Settings → SMS Notifications.");
   } else {
     const at = s.providerConfig.africastalking;
     if (!at.apiKey || !at.username) throw new Error("Africa's Talking credentials not configured. Go to Settings → SMS Notifications.");

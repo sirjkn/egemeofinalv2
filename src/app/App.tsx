@@ -36,7 +36,7 @@ import { LeadsPage } from "@/app/pages/LeadsPage";
 import { ReportsPage } from "@/app/pages/ReportsPage";
 import { SettingsPage, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
 import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, fmtKES, fmtKESFull, fmtDate, fmtDateTime } from "@/app/shared";
-import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
+import { sendSms, smsTemplates, SMS_TRIGGERS, loadSmsSettingsFromSupabase } from "@/lib/sms";
 import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
 import { toast, Toaster } from "sonner";
@@ -7489,6 +7489,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Pre-load SMS credentials from DB so every device/user has them in localStorage
+    loadSmsSettingsFromSupabase().catch(() => {});
     // Pull module visibility + view settings from Supabase on every app load
     syncVisibilitySettingsFromCloud().catch(() => {});
 
@@ -7533,8 +7535,8 @@ export default function App() {
 
         if (!plots?.length) return;
 
-        const { getSmsSettings, sendSms: _sendSms } = await import("@/lib/sms");
-        const cfg = getSmsSettings();
+        const { loadSmsSettingsFromSupabase: _loadSms, sendSms: _sendSms } = await import("@/lib/sms");
+        const cfg = await _loadSms();
         if (!cfg.smsEnabled) return;
 
         const resolvePhone = async (memberId: number, directPhone: string | null | undefined): Promise<string | null> => {

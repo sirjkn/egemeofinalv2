@@ -22,7 +22,7 @@ import { getCompanyDetails, saveCompanyDetails, type CompanyDetails } from "@/li
 import { downloadSystemGuidePdf } from "@/lib/pdf";
 import { getPaymentSettings, type PaymentSettings } from "@/lib/mpesa";
 import { loadPaymentSettingsFromDb, savePaymentSettingsToDb, loadSmsSettingsFromDb, saveSmsSettingsToDb, loadReminderTemplates, saveReminderTemplates } from "@/lib/settingsApi";
-import { getSmsSettings, saveSmsSettings, mergeSmsSettings, sendSms, SMS_TRIGGERS, DEFAULT_TEMPLATES, interpolate, type SmsSettings } from "@/lib/sms";
+import { getSmsSettings, saveSmsSettings, mergeSmsSettings, sendSms, loadSmsSettingsFromSupabase, SMS_TRIGGERS, DEFAULT_TEMPLATES, interpolate, type SmsSettings } from "@/lib/sms";
 import { useImpersonation } from "@/lib/impersonation";
 import type { UserProfile } from "@/app/pages/AuthPage";
 import { useNavigate } from "react-router";

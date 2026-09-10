@@ -5,7 +5,7 @@ import {
   CheckCircle, ArrowLeft, User, KeyRound,
 } from "lucide-react";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
-import { sendSms } from "@/lib/sms";
+import { sendSms, loadSmsSettingsFromSupabase } from "@/lib/sms";
 
 export interface UserProfile {
   id: string;
@@ -740,6 +740,9 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
   const handleSendOtp = async () => {
     setLoading(true); setErr("");
     try {
+      // Ensure SMS credentials are loaded from DB (covers devices that never visited Settings)
+      await loadSmsSettingsFromSupabase().catch(() => {});
+
       // Generate OTP client-side and store in sessionStorage (no server needed)
       const otp = String(Math.floor(100000 + Math.random() * 900000));
       const expires = Date.now() + 10 * 60 * 1000;
@@ -785,11 +788,12 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
         .maybeSingle();
       if (!profile?.id) throw new Error("Account not found. Please contact your admin.");
 
-      // 3. Reset password via Edge Function (no Express needed)
+      // 3. Reset password via Edge Function
       const { data: resetData, error: resetErr } = await supabase.functions.invoke("admin-reset-password", {
         body: { userId: profile.id, newPassword: newPw },
       });
-      if (resetErr || !resetData?.success) throw new Error(resetData?.error || resetErr?.message || "Reset failed");
+      if (resetErr) throw new Error(resetErr.message?.includes("Failed to send") ? "Password reset service unavailable. Please contact your admin to reset your password." : (resetErr.message || "Reset failed"));
+      if (!resetData?.success) throw new Error(resetData?.error || "Reset failed");
       setSuccess(true);
       await new Promise((r) => setTimeout(r, 1800));
       onDone();

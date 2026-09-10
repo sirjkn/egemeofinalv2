@@ -5,20 +5,21 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 const json = (body: object, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS },
   });
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "authorization, content-type",
-      },
-    });
+    return new Response(null, { headers: CORS });
   }
 
   try {
@@ -32,8 +33,7 @@ Deno.serve(async (req) => {
     const { error } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
     if (error) return json({ success: false, error: error.message }, 400);
 
-    // Clear flag so member is prompted to change on next login
-    await supabase.from("user_profiles").update({ password_changed: false }).eq("id", userId);
+    await supabase.from("user_profiles").update({ password_changed: true }).eq("id", userId);
 
     return json({ success: true });
   } catch (err: any) {
