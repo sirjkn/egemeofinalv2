@@ -73,11 +73,17 @@ function useCanMakePayment() { const p = useProfile(); return !!p && (p.role ===
 
 // Billing cycle: day 1–10 → previous month's contribution period; day 11+ → current month
 function getBillingPeriod(date: Date = new Date()): { month: number; year: number } {
-  if (date.getDate() <= 10) {
-    const prev = new Date(date.getFullYear(), date.getMonth() - 1, 1);
-    return { month: prev.getMonth() + 1, year: prev.getFullYear() };
+  // Billing boundary = 10th at 23:59:59 EAT (UTC+3 = 20:59:59 UTC).
+  // Use UTC throughout so the result is timezone-independent.
+  const utcYear  = date.getUTCFullYear();
+  const utcMonth = date.getUTCMonth(); // 0-indexed
+  const deadlineMs = Date.UTC(utcYear, utcMonth, 10, 20, 59, 59); // 10th 23:59:59 EAT
+  if (date.getTime() <= deadlineMs) {
+    // Before or on the deadline → billing is the previous month
+    const prev = new Date(Date.UTC(utcYear, utcMonth - 1, 1));
+    return { month: prev.getUTCMonth() + 1, year: prev.getUTCFullYear() };
   }
-  return { month: date.getMonth() + 1, year: date.getFullYear() };
+  return { month: utcMonth + 1, year: utcYear };
 }
 
 // When an admin changes a member's phone number, sync the Supabase Auth email so
@@ -6003,9 +6009,10 @@ function RecordContributionModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.year]);
 
-  // Deadline = 10th of month after the contribution month
-  const contributionDeadline = new Date(form.year, form.month, 10);
-  const isAfterDeadline = today > contributionDeadline;
+  // Deadline = 10th of month after the contribution month, at 23:59:59 EAT (UTC+3 = 20:59:59 UTC).
+  // form.month is 1-indexed (e.g. 8 = August) → as 0-indexed it equals the NEXT calendar month.
+  const contributionDeadlineMs = Date.UTC(form.year, form.month, 10, 20, 59, 59);
+  const isAfterDeadline = today.getTime() > contributionDeadlineMs;
 
   const handleProceed = () => {
     if (!form.shareholder_id) { setErr("Select a shareholder"); return; }

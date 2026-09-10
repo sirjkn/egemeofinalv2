@@ -5284,13 +5284,14 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
   };
 
   const sendDeadline = () => {
-    const today = new Date();
-    const day = today.getDate();
-    // Day 1-10: billing month is previous month → deadline is 10th of current month
-    // Day 11+:  billing month is current month  → deadline is 10th of next month
-    const deadlineDate = day <= 10
-      ? new Date(today.getFullYear(), today.getMonth(), 10)
-      : new Date(today.getFullYear(), today.getMonth() + 1, 10);
+    const now = new Date();
+    // Boundary = 10th at 23:59:59 EAT (UTC+3 = 20:59:59 UTC)
+    const utcYear  = now.getUTCFullYear();
+    const utcMonth = now.getUTCMonth(); // 0-indexed
+    const deadlineMs = Date.UTC(utcYear, utcMonth, 10, 20, 59, 59);
+    const deadlineDate = now.getTime() <= deadlineMs
+      ? new Date(Date.UTC(utcYear, utcMonth, 10))      // 10th of current month
+      : new Date(Date.UTC(utcYear, utcMonth + 1, 10)); // 10th of next month
     return deadlineDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   };
 
