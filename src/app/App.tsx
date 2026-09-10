@@ -2073,8 +2073,8 @@ function ShareholdersPage() {
           {[
             { label: "Net Savings",   value: fmtKESFull(Number(m.net_savings)) },
             { label: "Total Profits", value: liveProfitTotal !== null ? fmtKESFull(liveProfitTotal) : fmtKESFull(Number(m.total_profits)) },
+            { label: "Cumulative",    value: fmtKESFull(Number(m.net_savings) + (liveProfitTotal !== null ? liveProfitTotal : Number(m.total_profits))) },
             { label: "Contributions", value: String(m.contributions_count) },
-            { label: "Member Since",  value: memberSince ?? fmtDate(m.joined_date) },
           ].map((s, i) => (
             <div key={i} className="px-4 py-3 text-center border-r border-b last:border-r-0" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
               <div className="text-sm font-bold text-white">{s.value}</div>

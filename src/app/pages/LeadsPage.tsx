@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import {
   Calendar, MapPin, Users, DollarSign, BarChart2,
   Plus, Search, Edit2, X, TrendingUp, TrendingDown,
-  ChevronLeft, ChevronRight, Target, Activity,
+  ChevronLeft, ChevronRight, Target, Activity, Trash2, Eye,
 } from "lucide-react";
 import {
   BarChart as RechartBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -157,6 +157,7 @@ function EventsSection() {
   const [editing,   setEditing]   = useState<LeadEvent | null>(null);
   const [formData,  setFormData]  = useState<Omit<LeadEvent, "id">>(EMPTY_EVENT);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [viewEvent, setViewEvent] = useState<LeadEvent | null>(null);
 
   const eventDates = useMemo(() => new Set(events.map((e) => e.date)), [events]);
 
@@ -181,6 +182,10 @@ function EventsSection() {
     setPanelOpen(false);
   };
   const handleClear = () => { setFormData(EMPTY_EVENT); setEditing(null); };
+  const deleteEvent = (id: number) => {
+    if (!window.confirm("Delete this event? This cannot be undone.")) return;
+    setEvents((prev) => prev.filter((e) => e.id !== id));
+  };
 
   const totals = useMemo(() => ({
     events:    events.length,
@@ -281,13 +286,17 @@ function EventsSection() {
                     <td className="px-4 py-2.5 font-medium" style={{ color: "#172033" }}>{fmtKESFull(ev.budget)}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: "#64748b" }}>{fmtDate(ev.date)}</td>
                     <td className="px-4 py-2.5">
-                      <button
-                        onClick={() => openEdit(ev)}
-                        className="flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded border transition-colors hover:bg-purple-50"
-                        style={{ color: "#7c3aed", borderColor: "#c4b5fd" }}
-                      >
-                        <Edit2 size={11} /> Edit
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => openEdit(ev)} className="p-1.5 rounded hover:bg-purple-50 transition-colors" title="Edit">
+                          <Edit2 size={13} color="#7c3aed" />
+                        </button>
+                        <button onClick={() => setViewEvent(ev)} className="p-1.5 rounded hover:bg-teal-50 transition-colors" title="View">
+                          <Eye size={13} color="#0f9d8f" />
+                        </button>
+                        <button onClick={() => deleteEvent(ev.id)} className="p-1.5 rounded hover:bg-red-50 transition-colors" title="Delete">
+                          <Trash2 size={13} color="#ef4444" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -296,6 +305,46 @@ function EventsSection() {
           </div>
         </div>
       </div>
+
+      {/* View Event Modal */}
+      {viewEvent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold" style={{ color: "#172033" }}>Event Details</h3>
+              <button onClick={() => setViewEvent(null)}><X size={15} color="#94a3b8" /></button>
+            </div>
+            <div className="flex flex-col">
+              {[
+                { label: "Event Name",    value: viewEvent.name },
+                { label: "Location",      value: viewEvent.location },
+                { label: "Nature",        value: viewEvent.nature },
+                { label: "Contacts",      value: String(viewEvent.contacts) },
+                { label: "Marketing Pax", value: String(viewEvent.marketingPax) },
+                { label: "Budget",        value: fmtKESFull(viewEvent.budget) },
+                { label: "Date",          value: fmtDate(viewEvent.date) },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex justify-between py-2 border-b" style={{ borderColor: "#f1f5f9" }}>
+                  <span className="text-[11px] font-semibold" style={{ color: "#94a3b8" }}>{label}</span>
+                  <span className="text-xs font-medium text-right" style={{ color: "#172033" }}>{value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => { openEdit(viewEvent); setViewEvent(null); }}
+                className="flex-1 text-xs font-bold py-2.5 rounded-lg text-white hover:opacity-90"
+                style={{ background: "#7c3aed" }}
+              >Edit Event</button>
+              <button
+                onClick={() => setViewEvent(null)}
+                className="px-4 text-xs font-semibold py-2.5 rounded-lg border hover:bg-gray-50"
+                style={{ color: "#64748b", borderColor: "#e2e8f0" }}
+              >Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create/Edit Panel */}
       <div
@@ -374,11 +423,15 @@ function LeadsSection() {
   const today     = new Date();
   const [selYear, setSelYear] = useState(today.getFullYear());
   const [selMonth,setSelMonth]= useState(today.getMonth());
-  const [leads,   setLeads]   = useState<Lead[]>(SEED_LEADS);
-  const [events]              = useState<LeadEvent[]>(SEED_EVENTS);
-  const [search,  setSearch]  = useState("");
-  const [addOpen, setAddOpen] = useState(false);
-  const [newLead, setNewLead] = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+  const [leads,      setLeads]      = useState<Lead[]>(SEED_LEADS);
+  const [events]                   = useState<LeadEvent[]>(SEED_EVENTS);
+  const [search,     setSearch]    = useState("");
+  const [addOpen,    setAddOpen]   = useState(false);
+  const [newLead,    setNewLead]   = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+  const [editOpen,   setEditOpen]  = useState(false);
+  const [editTarget, setEditTarget]= useState<Lead | null>(null);
+  const [editForm,   setEditForm]  = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+  const [viewTarget, setViewTarget]= useState<Lead | null>(null);
 
   const monthEvents = useMemo(() =>
     events.filter((e) => {
@@ -404,6 +457,22 @@ function LeadsSection() {
 
   const changeStatus = (leadId: number, status: PipelineStatus) => {
     setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, status } : l));
+  };
+
+  const openEditLead = (lead: Lead) => {
+    setEditTarget(lead);
+    setEditForm({ firstName: lead.firstName, lastName: lead.lastName, phone: lead.phone, email: lead.email, eventId: lead.eventId, note: lead.note, status: lead.status });
+    setEditOpen(true);
+  };
+  const saveEditLead = () => {
+    if (!editForm.firstName.trim() || !editForm.phone.trim() || !editTarget) return;
+    setLeads((prev) => prev.map((l) => l.id === editTarget.id ? { ...l, ...editForm } : l));
+    setEditOpen(false);
+    setEditTarget(null);
+  };
+  const deleteLead = (id: number) => {
+    if (!window.confirm("Delete this lead? This cannot be undone.")) return;
+    setLeads((prev) => prev.filter((l) => l.id !== id));
   };
 
   const getEventName = (id: number) => events.find((e) => e.id === id)?.name ?? "—";
@@ -572,6 +641,112 @@ function LeadsSection() {
         </div>
       )}
 
+      {/* Edit Lead Modal */}
+      {editOpen && editTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold" style={{ color: "#172033" }}>Edit Lead</h3>
+              <button onClick={() => setEditOpen(false)}><X size={15} color="#94a3b8" /></button>
+            </div>
+            <div className="flex flex-col gap-3">
+              {[
+                { key: "firstName", label: "First Name", placeholder: "e.g. Olivia" },
+                { key: "lastName",  label: "Last Name",  placeholder: "e.g. Auma" },
+                { key: "phone",     label: "Phone",      placeholder: "+254..." },
+                { key: "email",     label: "Email",      placeholder: "email@example.com" },
+                { key: "note",      label: "Note",       placeholder: "Any note..." },
+              ].map(({ key, label, placeholder }) => (
+                <div key={key}>
+                  <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>{label}</label>
+                  <input
+                    className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    style={{ borderColor: "#e2e8f0" }}
+                    placeholder={placeholder}
+                    value={String(editForm[key as keyof typeof editForm] ?? "")}
+                    onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))}
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>SOURCE EVENT</label>
+                <select
+                  className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  style={{ borderColor: "#e2e8f0" }}
+                  value={editForm.eventId}
+                  onChange={(e) => setEditForm((p) => ({ ...p, eventId: Number(e.target.value) }))}
+                >
+                  <option value={0}>— Select Event —</option>
+                  {events.map((ev) => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>PIPELINE STATUS</label>
+                <select
+                  className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  style={{ borderColor: "#e2e8f0" }}
+                  value={editForm.status}
+                  onChange={(e) => setEditForm((p) => ({ ...p, status: e.target.value as PipelineStatus }))}
+                >
+                  {PIPELINE_STAGES.map((s) => <option key={s.id} value={s.id}>{s.label.replace(" (New)", "")}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={saveEditLead}
+                className="flex-1 text-xs font-bold py-2.5 rounded-lg text-white hover:opacity-90"
+                style={{ background: "#3b82f6" }}
+              >Save Changes</button>
+              <button
+                onClick={() => setEditOpen(false)}
+                className="px-4 text-xs font-semibold py-2.5 rounded-lg border hover:bg-gray-50"
+                style={{ color: "#64748b", borderColor: "#e2e8f0" }}
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Lead Modal */}
+      {viewTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold" style={{ color: "#172033" }}>Lead Details</h3>
+              <button onClick={() => setViewTarget(null)}><X size={15} color="#94a3b8" /></button>
+            </div>
+            <div className="flex flex-col">
+              {[
+                { label: "Full Name",       value: `${viewTarget.firstName} ${viewTarget.lastName}` },
+                { label: "Phone",           value: viewTarget.phone },
+                { label: "Email",           value: viewTarget.email || "—" },
+                { label: "Source Event",    value: getEventName(viewTarget.eventId) },
+                { label: "Note",            value: viewTarget.note || "—" },
+                { label: "Pipeline Status", value: STATUS_BADGE[viewTarget.status].label },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex justify-between py-2.5 border-b" style={{ borderColor: "#f1f5f9" }}>
+                  <span className="text-[11px] font-semibold" style={{ color: "#94a3b8" }}>{label}</span>
+                  <span className="text-xs font-medium text-right max-w-[60%]" style={{ color: "#172033" }}>{value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => { openEditLead(viewTarget); setViewTarget(null); }}
+                className="flex-1 text-xs font-bold py-2.5 rounded-lg text-white hover:opacity-90"
+                style={{ background: "#3b82f6" }}
+              >Edit Lead</button>
+              <button
+                onClick={() => setViewTarget(null)}
+                className="px-4 text-xs font-semibold py-2.5 rounded-lg border hover:bg-gray-50"
+                style={{ color: "#64748b", borderColor: "#e2e8f0" }}
+              >Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Leads Output Ledger */}
       <div className="bg-white rounded-lg border" style={{ borderColor: "#e2e8f0" }}>
         <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: "#e2e8f0" }}>
@@ -582,7 +757,7 @@ function LeadsSection() {
           <table className="w-full text-xs">
             <thead>
               <tr style={{ background: "#f8fafc" }}>
-                {["FIRST NAME","LAST NAME","MOBILE / PHONE","EMAIL ADDRESS","SOURCE EVENT","NOTE / SECTION","PIPELINE STATUS"].map((h) => (
+                {["FIRST NAME","LAST NAME","MOBILE / PHONE","EMAIL ADDRESS","SOURCE EVENT","NOTE / SECTION","PIPELINE STATUS","ACTIONS"].map((h) => (
                   <th key={h} className="text-left px-4 py-2.5 font-semibold uppercase tracking-wide text-[10px] whitespace-nowrap" style={{ color: "#94a3b8" }}>{h}</th>
                 ))}
               </tr>
@@ -609,6 +784,19 @@ function LeadsSection() {
                           <option key={s.id} value={s.id}>{s.label.replace(" (New)", "")}</option>
                         ))}
                       </select>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => openEditLead(lead)} className="p-1.5 rounded hover:bg-blue-50 transition-colors" title="Edit">
+                          <Edit2 size={13} color="#3b82f6" />
+                        </button>
+                        <button onClick={() => setViewTarget(lead)} className="p-1.5 rounded hover:bg-teal-50 transition-colors" title="View">
+                          <Eye size={13} color="#0f9d8f" />
+                        </button>
+                        <button onClick={() => deleteLead(lead.id)} className="p-1.5 rounded hover:bg-red-50 transition-colors" title="Delete">
+                          <Trash2 size={13} color="#ef4444" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
