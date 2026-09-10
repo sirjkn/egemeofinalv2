@@ -1496,7 +1496,14 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
       note: extras?.comment ?? "",
     });
     await plotsApi.recordPayment(payTarget.id, amt, structuredNotes);
-    if (payerPhone) sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amt.toLocaleString()}`, payTarget.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+    {
+      let smsPhone = payerPhone;
+      if (!smsPhone && memberId) {
+        const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", memberId).maybeSingle();
+        if (up?.email) { const prefix = up.email.split("@")[0]; if (/^[0-9+]/.test(prefix)) smsPhone = prefix; }
+      }
+      if (smsPhone) sendSms(smsPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amt.toLocaleString()}`, payTarget.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+    }
     logActivity({ category: "plot", action: "payment", description: `Plot ${payTarget.plot_number} payment of KES ${amt.toLocaleString()} recorded for ${payerName}`, actor_name: memberName, meta: { plot_id: payTarget.id, amount: amt } });
     if (method === "mpesa") {
       const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payTarget.plot_number}`;
@@ -2741,32 +2748,51 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const [projectCostProfit, setProjectCostProfit] = useState<Array<{ name: string; cost: number; profit: number; year: number }>>([]);
   const [showProfitsModal, setShowProfitsModal] = useState(false);
 
+  const loadAdminStats = async () => {
+    const now = new Date(); const { month, year } = getBillingPeriod(now);
+    const [shR, clR, invR, activeSHR, monR, plotR, payR, contribAllR] = await Promise.all([
+      supabase.from("shareholders").select("id", { count: "exact", head: true }),
+      supabase.from("clients").select("id", { count: "exact", head: true }).eq("status", "Active"),
+      supabase.from("investors").select("id", { count: "exact", head: true }),
+      supabase.from("shareholders").select("id, net_savings").neq("status", "Inactive"),
+      supabase.from("contributions").select("amount, status").eq("month", month).eq("year", year),
+      supabase.from("plots").select("id, status"),
+      supabase.from("payments").select("id, amount, purpose, created_at, status, member_type").order("created_at", { ascending: false }).limit(30),
+      supabase.from("contributions").select("amount, month, year").order("year", { ascending: true }).order("month", { ascending: true }),
+    ]);
+
+    const shCount  = shR.count ?? 0;
+    const clCount  = clR.count ?? 0;
+    const invCount = invR.count ?? 0;
+
+    // Total Collected: mirrors the Contributions module logic.
+    // Use net_savings (authoritative — reflects refunds + pre-migration data) when set;
+    // fall back to summing contributions rows only for shareholders where net_savings is null.
+    const activeSHData = (activeSHR.data ?? []) as Array<{ id: number; net_savings: number | null }>;
+    const withSavings    = activeSHData.filter((s) => s.net_savings != null);
+    const withoutSavings = activeSHData.filter((s) => s.net_savings == null);
+    let totalCollected = withSavings.reduce((sum, s) => sum + Math.max(0, Number(s.net_savings)), 0);
+    if (withoutSavings.length > 0) {
+      const ids = withoutSavings.map((s) => s.id);
+      const { data: fallbackContribs } = await supabase.from("contributions").select("amount").in("shareholder_id", ids);
+      totalCollected += (fallbackContribs ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0);
+    }
+
+    setStats({
+      shareholders: shCount, clients: clCount, investors: invCount,
+      totalCollected,
+      thisMonth: (monR.data ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0),
+      overdueCount: (monR.data ?? []).filter((r: any) => r.status === "late").length,
+      plots: (plotR.data ?? []).length,
+      assignedPlots: (plotR.data ?? []).filter((p: any) => p.status === "assigned" || p.status === "sold").length,
+    });
+    return { payR, contribAllR, plotR, shCount, clCount, invCount };
+  };
+
   useEffect(() => {
     (async () => {
+      const { payR, contribAllR, plotR, shCount, clCount, invCount } = await loadAdminStats();
       const now = new Date(); const { month, year } = getBillingPeriod(now);
-      const [shR, clR, invR, totR, monR, plotR, payR, contribAllR] = await Promise.all([
-        supabase.from("shareholders").select("id", { count: "exact", head: true }),
-        supabase.from("clients").select("id", { count: "exact", head: true }).eq("status", "Active"),
-        supabase.from("investors").select("id", { count: "exact", head: true }),
-        supabase.from("contributions").select("amount"),
-        supabase.from("contributions").select("amount, status").eq("month", month).eq("year", year),
-        supabase.from("plots").select("id, status"),
-        supabase.from("payments").select("id, amount, purpose, created_at, status, member_type").order("created_at", { ascending: false }).limit(30),
-        supabase.from("contributions").select("amount, month, year").order("year", { ascending: true }).order("month", { ascending: true }),
-      ]);
-
-      const shCount  = shR.count ?? 0;
-      const clCount  = clR.count ?? 0;
-      const invCount = invR.count ?? 0;
-
-      setStats({
-        shareholders: shCount, clients: clCount, investors: invCount,
-        totalCollected: (totR.data ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0),
-        thisMonth: (monR.data ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0),
-        overdueCount: (monR.data ?? []).filter((r: any) => r.status === "late").length,
-        plots: (plotR.data ?? []).length,
-        assignedPlots: (plotR.data ?? []).filter((p: any) => p.status === "assigned" || p.status === "sold").length,
-      });
 
       // Member distribution pie
       setMemberDist([
@@ -2843,6 +2869,14 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         })));
       }
     })();
+
+    // Realtime: re-calculate totalCollected when contributions or shareholders change
+    const realtimeSub = supabase
+      .channel("admin-stats-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "contributions" }, () => { loadAdminStats(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "shareholders" }, () => { loadAdminStats(); })
+      .subscribe();
+    return () => { supabase.removeChannel(realtimeSub); };
   }, []);
 
   const ChartSkeleton = () => <div className="h-36 w-full animate-pulse rounded-xl" style={{ background: "#f1f5f9" }} />;
@@ -2871,38 +2905,64 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         </div>
 
         {/* Stat cards */}
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { label: "Shareholders",    value: stats ? String(stats.shareholders)       : "—",     sub: "Total members",  icon: <Users size={20} />,          iconColor: "#6366f1", iconBg: "#eef2ff" },
-            { label: "Total Collected", value: stats ? fmtKESFull(stats.totalCollected) : "KES —", sub: "All time",       icon: <Link2 size={20} />,          iconColor: "#22c55e", iconBg: "#f0fdf4" },
-            { label: "Clients",         value: stats ? String(stats.clients)            : "—",     sub: "Active",         icon: <UserCircle2 size={20} />,    iconColor: "#a855f7", iconBg: "#faf5ff" },
-          ].map((s) => (
-            <div key={s.label} className="bg-white rounded-xl p-4 flex items-center gap-3 border" style={{ borderColor: "var(--card-border)" }}>
-              <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: s.iconBg, color: s.iconColor }}>{s.icon}</div>
-              <div><div className="text-xl font-bold" style={{ color: "#1a202c" }}>{s.value}</div><div className="text-xs font-semibold" style={{ color: s.iconColor }}>{s.label}</div><div className="text-xs text-gray-400">{s.sub}</div></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* 1st — Total Members (Shareholders), no colour BG */}
+          <div className="bg-white rounded-xl p-4 flex items-center gap-3 border" style={{ borderColor: "var(--card-border)" }}>
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#eef2ff", color: "#6366f1" }}><Users size={20} /></div>
+            <div>
+              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{stats ? String(stats.shareholders) : "—"}</div>
+              <div className="text-xs font-semibold" style={{ color: "#6366f1" }}>Total Members</div>
+              <div className="text-xs text-gray-400">Shareholders</div>
             </div>
-          ))}
-          {/* Total Profits card — clickable */}
+          </div>
+          {/* 2nd — Total Clients, no colour BG */}
+          <div className="bg-white rounded-xl p-4 flex items-center gap-3 border" style={{ borderColor: "var(--card-border)" }}>
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#faf5ff", color: "#a855f7" }}><UserCircle2 size={20} /></div>
+            <div>
+              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{stats ? String(stats.clients) : "—"}</div>
+              <div className="text-xs font-semibold" style={{ color: "#a855f7" }}>Total Clients</div>
+              <div className="text-xs text-gray-400">Active</div>
+            </div>
+          </div>
+          {/* 3rd — Total Collected, green */}
+          <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: "#16a34a" }}>
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><Link2 size={20} color="white" /></div>
+            <div>
+              <div className="text-xl font-bold text-white">{stats ? fmtKESFull(stats.totalCollected) : "KES —"}</div>
+              <div className="text-xs font-semibold text-white">Total Collected</div>
+              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Excl. inactive members</div>
+            </div>
+          </div>
+          {/* 4th — Total Profits, yellow, clickable */}
           <button onClick={() => setShowProfitsModal(true)}
-            className="bg-white rounded-xl p-4 flex items-center gap-3 border text-left hover:shadow-md transition-shadow"
-            style={{ borderColor: "var(--card-border)" }}>
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#fefce8", color: "#ca8a04" }}>
-              <TrendingUp size={20} />
+            className="rounded-xl p-4 flex items-center gap-3 text-left hover:brightness-110 transition-all"
+            style={{ background: "#ca8a04" }}>
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}>
+              <TrendingUp size={20} color="white" />
             </div>
             <div>
-              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>
+              <div className="text-xl font-bold text-white">
                 {totalProfits === null ? "KES —" : fmtKESFull(totalProfits)}
               </div>
-              <div className="text-xs font-semibold" style={{ color: "#ca8a04" }}>Total Profits Assigned</div>
-              <div className="text-xs text-gray-400">{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""} · tap to view</div>
+              <div className="text-xs font-semibold text-white">Total Profits</div>
+              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""} · tap to view</div>
             </div>
           </button>
+          {/* 5th — Cumulative Totals, blue, full width */}
+          <div className="rounded-xl p-4 flex items-center gap-3 sm:col-span-2" style={{ background: "#1d4ed8" }}>
+            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><BarChart2 size={20} color="white" /></div>
+            <div>
+              <div className="text-xl font-bold text-white">{stats && totalProfits !== null ? fmtKESFull(stats.totalCollected + totalProfits) : "KES —"}</div>
+              <div className="text-xs font-semibold text-white">Cumulative Totals</div>
+              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Total Collected + Total Profits</div>
+            </div>
+          </div>
         </div>
 
         {/* Modules grid */}
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">Modules</h3>
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
             {adminDashMods.map((mod) => (
               <button key={mod.id} onClick={() => onNavigate(mod.id)}
                 className="bg-white rounded-xl p-3 flex flex-col items-center gap-2 border hover:shadow-md transition-shadow"
@@ -3228,7 +3288,14 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       note: extras?.comment ?? "",
     });
     await plotsApi.recordPayment(plotPayTarget.id, parsedPlotAmt, structuredNotes, today);
-    if (payerPhone) sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${parsedPlotAmt.toLocaleString()}`, plotPayTarget.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+    {
+      let smsPhone = payerPhone;
+      if (!smsPhone && mid) {
+        const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", mid).maybeSingle();
+        if (up?.email) { const prefix = up.email.split("@")[0]; if (/^[0-9+]/.test(prefix)) smsPhone = prefix; }
+      }
+      if (smsPhone) sendSms(smsPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${parsedPlotAmt.toLocaleString()}`, plotPayTarget.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+    }
     logActivity({ category: "plot", action: "payment", description: `Plot ${plotPayTarget.plot_number} payment of KES ${parsedPlotAmt.toLocaleString()} via ${method} by ${payerName}`, meta: { plot_id: plotPayTarget.id, amount: parsedPlotAmt, method } });
     if (method === "mpesa") {
       const baseComment = `PHONE:${payerPhone}|ACCOUNT:${plotPayTarget.plot_number}`;
@@ -3456,48 +3523,49 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         {/* Stat cards */}
         <div className="grid grid-cols-2 gap-3">
           {isSH && stats && <>
-            <div className="bg-white rounded-xl p-4 border" style={{ borderColor: "var(--card-border)" }}>
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#fdf2f8", color: "#ec4899" }}><Link2 size={17} /></div>
-              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(stats.totalContributed)}</div>
-              <div className="text-xs font-semibold" style={{ color: "#ec4899" }}>Net Savings</div>
-              <div className="text-xs text-gray-400">{stats.contributionCount} contributions</div>
+            <div className="rounded-xl p-4" style={{ background: "#ec4899" }}>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><Link2 size={17} color="white" /></div>
+              <div className="text-xl font-bold text-white">{fmtKESFull(stats.totalContributed)}</div>
+              <div className="text-xs font-semibold text-white">Net Savings</div>
+              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>{stats.contributionCount} contributions</div>
             </div>
             <button onClick={openNetProfits}
-              className="bg-white rounded-xl p-4 border text-left hover:shadow-md transition-shadow active:scale-[0.98]"
-              style={{ borderColor: "var(--card-border)" }}>
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#fef9c3", color: "#ca8a04" }}><TrendingUp size={17} /></div>
-              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(profitDists.reduce((s, d) => s + Number(d.amount), 0))}</div>
-              <div className="text-xs font-semibold" style={{ color: "#ca8a04" }}>Net Profits</div>
-              <div className="text-xs text-gray-400">Tap to view per project</div>
+              className="rounded-xl p-4 text-left hover:brightness-110 transition-all active:scale-[0.98]"
+              style={{ background: "#ca8a04" }}>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><TrendingUp size={17} color="white" /></div>
+              <div className="text-xl font-bold text-white">{fmtKESFull(profitDists.reduce((s, d) => s + Number(d.amount), 0))}</div>
+              <div className="text-xs font-semibold text-white">Net Profits</div>
+              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Tap to view per project</div>
             </button>
           </>}
           {stats && <>
-            <div className="bg-white rounded-xl p-4 border" style={{ borderColor: "var(--card-border)" }}>
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#fff7ed", color: "#f97316" }}><Calendar size={17} /></div>
-              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(isSH ? stats.thisMonth : thisMonthPlotPaid)}</div>
-              <div className="text-xs font-semibold" style={{ color: "#f97316" }}>{isSH ? "This Month" : "Total Paid"}</div>
-              <div className="text-xs text-gray-400">{isSH ? "Contribution" : "Plot payment"}</div>
+            <div className="rounded-xl p-4" style={{ background: "#f97316" }}>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><Calendar size={17} color="white" /></div>
+              <div className="text-xl font-bold text-white">{fmtKESFull(isSH ? stats.thisMonth : thisMonthPlotPaid)}</div>
+              <div className="text-xs font-semibold text-white">{isSH ? "This Month" : "Total Paid"}</div>
+              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>{isSH ? "Contribution" : "Plot payment"}</div>
             </div>
             {isSH && (
-              <div className="bg-white rounded-xl p-4 border" style={{ borderColor: "var(--card-border)" }}>
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#eef2ff", color: "#6366f1" }}><TrendingUp size={17} /></div>
-                <div className="text-xl font-bold" style={{ color: "#1a202c" }}>
+              <div className="rounded-xl p-4" style={{ background: "#1d4ed8" }}>
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><TrendingUp size={17} color="white" /></div>
+                <div className="text-xl font-bold text-white">
                   {fmtKESFull(stats.totalContributed + profitDists.reduce((s, d) => s + Number(d.amount), 0))}
                 </div>
-                <div className="text-xs font-semibold" style={{ color: "#6366f1" }}>Cumulative</div>
-                <div className="text-xs text-gray-400">Savings + Profits</div>
+                <div className="text-xs font-semibold text-white">Cumulative</div>
+                <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Savings + Profits</div>
               </div>
             )}
             {/* Plot Payments stat — clients/investors only, paired with This Month */}
             {!isSH && (() => {
               const totalRemaining = plotsData.reduce((s, p) => s + p.remaining, 0);
               const done = plotsData.filter((p) => p.pct >= 100).length;
+              const bg = totalRemaining > 0 ? "#d97706" : "#059669";
               return (
-                <div className="bg-white rounded-xl p-4 border" style={{ borderColor: "var(--card-border)" }}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "#fef3c7", color: "#d97706" }}><MapPin size={17} /></div>
-                  <div className="text-xl font-bold" style={{ color: totalRemaining > 0 ? "#d97706" : "#059669" }}>{fmtKESFull(totalRemaining)}</div>
-                  <div className="text-xs font-semibold" style={{ color: totalRemaining > 0 ? "#d97706" : "#059669" }}>Balance Due</div>
-                  <div className="text-xs text-gray-400">{plotsData.length} plot{plotsData.length !== 1 ? "s" : ""}{done > 0 ? `, ${done} complete` : ""}</div>
+                <div className="rounded-xl p-4" style={{ background: bg }}>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><MapPin size={17} color="white" /></div>
+                  <div className="text-xl font-bold text-white">{fmtKESFull(totalRemaining)}</div>
+                  <div className="text-xs font-semibold text-white">Balance Due</div>
+                  <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>{plotsData.length} plot{plotsData.length !== 1 ? "s" : ""}{done > 0 ? `, ${done} complete` : ""}</div>
                 </div>
               );
             })()}
@@ -4374,7 +4442,14 @@ function MyPlotsPage() {
             note: extras?.comment ?? "",
           });
           await plotsApi.recordPayment(payPlot.id, amount, structuredNotes, today);
-          if (payerPhone) sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amount.toLocaleString()}`, payPlot.plot_number, reference ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+          {
+            let smsPhone = payerPhone;
+            if (!smsPhone && profile.member_id) {
+              const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", profile.member_id).maybeSingle();
+              if (up?.email) { const prefix = up.email.split("@")[0]; if (/^[0-9+]/.test(prefix)) smsPhone = prefix; }
+            }
+            if (smsPhone) sendSms(smsPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amount.toLocaleString()}`, payPlot.plot_number, reference ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+          }
           if (method === "mpesa" && reference) {
             const baseComment = `PHONE:${payerPhone}|ACCOUNT:${payPlot.plot_number}`;
             await paymentsApi.create({
@@ -6054,11 +6129,16 @@ function RecordContributionModal({
           shareholder_id: form.shareholder_id,
         });
       }
-      if (selectedSh?.phone) {
+      {
         const monthName = MONTHS[(form.month - 1)];
-        sendSms(
-          selectedSh.phone,
-          smsTemplates.contribReceipt(selectedSh.name.split(" ")[0], `KES ${amt.toLocaleString()}`, `${monthName} ${form.year}`, reference),
+        let smsPhone = selectedSh?.phone ?? "";
+        if (!smsPhone && selectedSh?.id) {
+          const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", selectedSh.id).maybeSingle();
+          if (up?.email) { const prefix = up.email.split("@")[0]; if (/^[0-9+]/.test(prefix)) smsPhone = prefix; }
+        }
+        if (smsPhone) sendSms(
+          smsPhone,
+          smsTemplates.contribReceipt(selectedSh!.name.split(" ")[0], `KES ${amt.toLocaleString()}`, `${monthName} ${form.year}`, reference),
           SMS_TRIGGERS.contribReceipt,
         ).catch(() => {});
       }
