@@ -1,4 +1,5 @@
 import { projectId, publicAnonKey } from "../../utils/supabase/info";
+import { supabase } from "@/lib/supabase";
 
 const PAYMENT_KEY = "sacco_payment_settings";
 const DARAJA_KEY = "sacco_daraja_config";
@@ -65,6 +66,42 @@ export function getDarajaConfig(): DarajaConfig {
 
 export function saveDarajaConfig(c: DarajaConfig) {
   localStorage.setItem(DARAJA_KEY, JSON.stringify(c));
+}
+
+/** Load payment settings from DB and cache to localStorage. Falls back to localStorage on error. */
+export async function loadPaymentSettingsFromSupabase(): Promise<PaymentSettings> {
+  try {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "payment_settings")
+      .maybeSingle();
+    if (data?.value) {
+      const merged: PaymentSettings = {
+        methods: { ...defaultPaymentSettings().methods, ...data.value.methods },
+      };
+      savePaymentSettings(merged);
+      return merged;
+    }
+  } catch { /* fall through */ }
+  return getPaymentSettings();
+}
+
+/** Load Daraja config from DB and cache to localStorage. Falls back to localStorage on error. */
+export async function loadDarajaConfigFromSupabase(): Promise<DarajaConfig> {
+  try {
+    const { data } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "daraja_config")
+      .maybeSingle();
+    if (data?.value) {
+      const merged: DarajaConfig = { ...defaultDarajaConfig(), ...data.value };
+      saveDarajaConfig(merged);
+      return merged;
+    }
+  } catch { /* fall through */ }
+  return getDarajaConfig();
 }
 
 // ─── STK Push types ───────────────────────────────────────────────────────────

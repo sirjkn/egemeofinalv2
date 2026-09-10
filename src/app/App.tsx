@@ -37,7 +37,7 @@ import { ReportsPage } from "@/app/pages/ReportsPage";
 import { SettingsPage, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
 import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, fmtKES, fmtKESFull, fmtDate, fmtDateTime } from "@/app/shared";
 import { sendSms, smsTemplates, SMS_TRIGGERS, loadSmsSettingsFromSupabase } from "@/lib/sms";
-import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings } from "@/lib/mpesa";
+import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings, loadPaymentSettingsFromSupabase, loadDarajaConfigFromSupabase } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
 import { toast, Toaster } from "sonner";
 import { LoginPage, SetPasswordPage, fetchProfile, type UserProfile, phoneToEmail } from "@/app/pages/AuthPage";
@@ -63,6 +63,7 @@ type PreviewRole = "admin" | "shareholder" | "client";
 // ─── Profile Context ──────────────────────────────────────────────────────────
 
 const ProfileCtx = createContext<UserProfile | null>(null);
+const PageKeyCtx = createContext<{ pageKey: number; bumpPageKey: () => void }>({ pageKey: 0, bumpPageKey: () => {} });
 function useProfile() {
   const { impersonating } = useImpersonation();
   const real = useContext(ProfileCtx);
@@ -2905,56 +2906,50 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         </div>
 
         {/* Stat cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {/* 1st — Total Members (Shareholders), no colour BG */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* Row 1: Total Members | Total Clients (no colour BG) */}
           <div className="bg-white rounded-xl p-4 flex items-center gap-3 border" style={{ borderColor: "var(--card-border)" }}>
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#eef2ff", color: "#6366f1" }}><Users size={20} /></div>
-            <div>
-              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{stats ? String(stats.shareholders) : "—"}</div>
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#eef2ff", color: "#6366f1" }}><Users size={18} /></div>
+            <div className="min-w-0">
+              <div className="text-lg font-bold truncate" style={{ color: "#1a202c" }}>{stats ? String(stats.shareholders) : "—"}</div>
               <div className="text-xs font-semibold" style={{ color: "#6366f1" }}>Total Members</div>
-              <div className="text-xs text-gray-400">Shareholders</div>
             </div>
           </div>
-          {/* 2nd — Total Clients, no colour BG */}
           <div className="bg-white rounded-xl p-4 flex items-center gap-3 border" style={{ borderColor: "var(--card-border)" }}>
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#faf5ff", color: "#a855f7" }}><UserCircle2 size={20} /></div>
-            <div>
-              <div className="text-xl font-bold" style={{ color: "#1a202c" }}>{stats ? String(stats.clients) : "—"}</div>
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "#faf5ff", color: "#a855f7" }}><UserCircle2 size={18} /></div>
+            <div className="min-w-0">
+              <div className="text-lg font-bold truncate" style={{ color: "#1a202c" }}>{stats ? String(stats.clients) : "—"}</div>
               <div className="text-xs font-semibold" style={{ color: "#a855f7" }}>Total Clients</div>
-              <div className="text-xs text-gray-400">Active</div>
             </div>
           </div>
-          {/* 3rd — Total Collected, green */}
+          {/* Row 2: Total Collected (green) | Total Profits (magenta) */}
           <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: "#16a34a" }}>
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><Link2 size={20} color="white" /></div>
-            <div>
-              <div className="text-xl font-bold text-white">{stats ? fmtKESFull(stats.totalCollected) : "KES —"}</div>
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><Link2 size={18} color="white" /></div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{stats ? fmtKESFull(stats.totalCollected) : "KES —"}</div>
               <div className="text-xs font-semibold text-white">Total Collected</div>
-              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Excl. inactive members</div>
+              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>Excl. inactive</div>
             </div>
           </div>
-          {/* 4th — Total Profits, yellow, clickable */}
           <button onClick={() => setShowProfitsModal(true)}
             className="rounded-xl p-4 flex items-center gap-3 text-left hover:brightness-110 transition-all"
-            style={{ background: "#ca8a04" }}>
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}>
-              <TrendingUp size={20} color="white" />
+            style={{ background: "#c026d3" }}>
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}>
+              <TrendingUp size={18} color="white" />
             </div>
-            <div>
-              <div className="text-xl font-bold text-white">
-                {totalProfits === null ? "KES —" : fmtKESFull(totalProfits)}
-              </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{totalProfits === null ? "KES —" : fmtKESFull(totalProfits)}</div>
               <div className="text-xs font-semibold text-white">Total Profits</div>
-              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""} · tap to view</div>
+              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""}</div>
             </div>
           </button>
-          {/* 5th — Cumulative Totals, blue, full width */}
-          <div className="rounded-xl p-4 flex items-center gap-3 sm:col-span-2" style={{ background: "#1d4ed8" }}>
-            <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><BarChart2 size={20} color="white" /></div>
-            <div>
-              <div className="text-xl font-bold text-white">{stats && totalProfits !== null ? fmtKESFull(stats.totalCollected + totalProfits) : "KES —"}</div>
+          {/* Row 3: Cumulative (blue, full width) */}
+          <div className="rounded-xl p-4 flex items-center gap-3 col-span-2" style={{ background: "#1d4ed8" }}>
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><BarChart2 size={18} color="white" /></div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{stats && totalProfits !== null ? fmtKESFull(stats.totalCollected + totalProfits) : "KES —"}</div>
               <div className="text-xs font-semibold text-white">Cumulative Totals</div>
-              <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Total Collected + Total Profits</div>
+              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>Total Collected + Total Profits</div>
             </div>
           </div>
         </div>
@@ -3531,7 +3526,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             </div>
             <button onClick={openNetProfits}
               className="rounded-xl p-4 text-left hover:brightness-110 transition-all active:scale-[0.98]"
-              style={{ background: "#ca8a04" }}>
+              style={{ background: "#c026d3" }}>
               <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><TrendingUp size={17} color="white" /></div>
               <div className="text-xl font-bold text-white">{fmtKESFull(profitDists.reduce((s, d) => s + Number(d.amount), 0))}</div>
               <div className="text-xs font-semibold text-white">Net Profits</div>
@@ -3539,7 +3534,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             </button>
           </>}
           {stats && <>
-            <div className="rounded-xl p-4" style={{ background: "#f97316" }}>
+            <div className="rounded-xl p-4" style={{ background: isSH ? "#f97316" : "#16a34a" }}>
               <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><Calendar size={17} color="white" /></div>
               <div className="text-xl font-bold text-white">{fmtKESFull(isSH ? stats.thisMonth : thisMonthPlotPaid)}</div>
               <div className="text-xs font-semibold text-white">{isSH ? "This Month" : "Total Paid"}</div>
@@ -3559,9 +3554,8 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             {!isSH && (() => {
               const totalRemaining = plotsData.reduce((s, p) => s + p.remaining, 0);
               const done = plotsData.filter((p) => p.pct >= 100).length;
-              const bg = totalRemaining > 0 ? "#d97706" : "#059669";
               return (
-                <div className="rounded-xl p-4" style={{ background: bg }}>
+                <div className="rounded-xl p-4" style={{ background: totalRemaining > 0 ? "#c026d3" : "#059669" }}>
                   <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><MapPin size={17} color="white" /></div>
                   <div className="text-xl font-bold text-white">{fmtKESFull(totalRemaining)}</div>
                   <div className="text-xs font-semibold text-white">Balance Due</div>
@@ -7120,6 +7114,7 @@ function Sidebar() {
   const location = useLocation();
   const active = (location.pathname.replace("/", "") || "dashboard") as Module;
   const visible = useVisibleNav();
+  const { bumpPageKey } = useContext(PageKeyCtx);
 
   const [hovered, setHovered] = useState(false);
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 768);
@@ -7168,7 +7163,7 @@ function Sidebar() {
         {visible.map((item) => {
           const isActive = active === item.id;
           return (
-            <button key={item.id} onClick={() => navigate(item.id === "dashboard" ? "/" : `/${item.id}`)}
+            <button key={item.id} onClick={() => { navigate(item.id === "dashboard" ? "/" : `/${item.id}`); bumpPageKey(); }}
               title={!expanded ? item.label : undefined}
               className="w-full flex items-center gap-2.5 px-2 py-2 rounded-xl text-sm font-medium transition-colors duration-100"
               style={{ background: isActive ? "var(--sidebar-accent)" : "transparent", color: isActive ? "var(--sidebar-accent-foreground)" : "var(--sidebar-foreground)" }}>
@@ -7195,7 +7190,8 @@ function BottomNav() {
   const active = (location.pathname.replace("/", "") || "dashboard") as Module;
   const [othersOpen, setOthersOpen] = useState(false);
   const visible = useVisibleNav();
-  const nav = (m: Module) => { navigate(m === "dashboard" ? "/" : `/${m}`); setOthersOpen(false); };
+  const { bumpPageKey } = useContext(PageKeyCtx);
+  const nav = (m: Module) => { navigate(m === "dashboard" ? "/" : `/${m}`); setOthersOpen(false); bumpPageKey(); };
   const visiblePrimary = visible.slice(0, 4);
   const visibleOthers  = visible.slice(4);
 
@@ -7259,6 +7255,8 @@ function AppShell() {
   const profile    = useProfile();
   const systemLive = useSystemLive();
   const { impersonating, setImpersonating } = useImpersonation();
+  const [pageKey, setPageKey] = useState(0);
+  const bumpPageKey = () => setPageKey((k) => k + 1);
 
   // Guard: redirect to dashboard if non-admin navigates to a module outside their role OR that is hidden for their role
   const hiddenForRole = useHiddenModules(profile?.role ?? "investor");
@@ -7300,6 +7298,7 @@ function AppShell() {
   };
 
   return (
+    <PageKeyCtx.Provider value={{ pageKey, bumpPageKey }}>
     <>
     <div className="size-full flex flex-col overflow-hidden" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
       <Toaster position="top-right" richColors />
@@ -7366,37 +7365,37 @@ function AppShell() {
 
         <main className="flex-1 overflow-hidden min-h-0">
           {active === "dashboard" ? (
-            <div className="h-full overflow-auto pb-20 md:pb-0">
-              <DashboardPage onNavigate={(m) => navigate(m === "dashboard" ? "/" : `/${m}`)} />
+            <div key={pageKey} className="h-full overflow-auto pb-20 md:pb-0">
+              <DashboardPage onNavigate={(m) => { navigate(m === "dashboard" ? "/" : `/${m}`); bumpPageKey(); }} />
             </div>
           ) : active === "my-plots" ? (
-            <div className="h-full overflow-auto pb-20 md:pb-0"><MyPlotsPage /></div>
+            <div key={pageKey} className="h-full overflow-auto pb-20 md:pb-0"><MyPlotsPage /></div>
           ) : active === "help" ? (
-            <div className="h-full overflow-auto pb-20 md:pb-0"><HelpPage /></div>
+            <div key={pageKey} className="h-full overflow-auto pb-20 md:pb-0"><HelpPage /></div>
           ) : active === "shareholders" ? (
-            <ShareholdersPage />
+            <ShareholdersPage key={pageKey} />
           ) : active === "clients" ? (
-            <ClientsPage />
+            <ClientsPage key={pageKey} />
           ) : active === "investors" ? (
-            <InvestorsPage />
+            <InvestorsPage key={pageKey} />
           ) : active === "contributions" ? (
-            <ContributionsPage />
+            <ContributionsPage key={pageKey} />
           ) : active === "projects" ? (
-            <ProjectsPage isAdmin={isAdmin} currentMemberId={profile?.member_id} currentMemberType={profile?.role} />
+            <ProjectsPage key={pageKey} isAdmin={isAdmin} currentMemberId={profile?.member_id} currentMemberType={profile?.role} />
           ) : active === "leads" ? (
-            <div className="h-full overflow-hidden"><LeadsPage /></div>
+            <div key={pageKey} className="h-full overflow-hidden"><LeadsPage /></div>
           ) : active === "reports" ? (
-            <ReportsPage />
+            <ReportsPage key={pageKey} />
           ) : active === "payments" ? (
-            <PaymentsPage />
+            <PaymentsPage key={pageKey} />
           ) : active === "mpesa-transactions" ? (
-            <MpesaTransactionsPage />
+            <MpesaTransactionsPage key={pageKey} />
           ) : active === "refunds" ? (
-            <RefundsPage />
+            <RefundsPage key={pageKey} />
           ) : active === "settings" ? (
-            <SettingsPage isAdmin={isAdmin} />
+            <SettingsPage key={pageKey} isAdmin={isAdmin} />
           ) : (
-            <PlaceholderPage module={active} />
+            <PlaceholderPage key={pageKey} module={active} />
           )}
         </main>
 
@@ -7455,6 +7454,7 @@ function AppShell() {
       </div>
     )}
     </>
+    </PageKeyCtx.Provider>
   );
 }
 
@@ -7489,8 +7489,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Pre-load SMS credentials from DB so every device/user has them in localStorage
+    // Pre-load ALL settings from DB on startup — eliminates per-device localStorage drift
     loadSmsSettingsFromSupabase().catch(() => {});
+    loadPaymentSettingsFromSupabase().catch(() => {});
+    loadDarajaConfigFromSupabase().catch(() => {});
     // Pull module visibility + view settings from Supabase on every app load
     syncVisibilitySettingsFromCloud().catch(() => {});
 
@@ -7617,6 +7619,29 @@ export default function App() {
     const t = setTimeout(run, 5000);
     return () => clearTimeout(t);
   }, [authReady]);
+
+  // ── Inactivity logout after 10 minutes ──────────────────────────────────────
+  useEffect(() => {
+    if (!session) return; // only track when logged in
+    const TIMEOUT_MS = 10 * 60 * 1000;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        if (profile) logActivity({ category: "auth", action: "logout", description: `${profile.full_name} auto-logged out (inactivity)`, actor_name: profile.full_name, actor_role: profile.role });
+        await supabase.auth.signOut();
+        setSession(null);
+        setProfile(null);
+      }, TIMEOUT_MS);
+    };
+    const events = ["mousemove", "keydown", "click", "touchstart", "scroll"];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset(); // start timer immediately
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, [session, profile]);
 
   const handleLoggedIn = async (s: any, p: UserProfile) => {
     setSession(s);
