@@ -7193,7 +7193,7 @@ function Sidebar() {
           return (
             <button key={item.id} onClick={() => { navigate(item.id === "dashboard" ? "/" : `/${item.id}`); bumpPageKey(); }}
               title={!expanded ? item.label : undefined}
-              className="w-full flex items-center gap-2.5 px-2 py-2 rounded-xl text-sm font-medium transition-colors duration-100"
+              className="w-full flex items-center gap-2.5 rounded-xl text-sm font-medium transition-colors duration-100 px-[7px] py-[10px]"
               style={{ background: isActive ? "var(--sidebar-accent)" : "transparent", color: isActive ? "var(--sidebar-accent-foreground)" : "var(--sidebar-foreground)" }}>
               <span className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: item.iconBg }}>{item.icon}</span>
               {expanded && (
