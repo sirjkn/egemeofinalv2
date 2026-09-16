@@ -2399,12 +2399,6 @@ function ClientsPage() {
           </div>
         </div>
 
-        <Accordion icon={<CreditCard size={16} />} label="Loan Accounts" meta="" color="#a855f7">
-          <p className="py-2 text-gray-400 text-xs">No active loans.</p>
-        </Accordion>
-        <Accordion icon={<TrendingUp size={16} />} label="Payment History" meta="" color="#22c55e">
-          <p className="py-2 text-gray-400 text-xs">Payment history will appear here.</p>
-        </Accordion>
         <Accordion icon={<BookOpen size={16} />} label="Documents" meta="" color="#f97316">
           <p className="py-2 text-gray-400 text-xs">Client documents will appear here.</p>
         </Accordion>
@@ -4330,10 +4324,23 @@ function MyPlotsPage() {
             <div className="px-4 py-3">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-bold text-sm" style={{ color: "#1a202c" }}>{p.plot_number}</p>
-                  {((p.project as any)?.project_name) && (
-                    <p className="text-xs text-gray-400">{(p.project as any).project_name}{(p.project as any).location ? ` · ${(p.project as any).location}` : ""}</p>
+                  <div className="flex items-center gap-1 flex-wrap font-bold text-sm">
+                    <span style={{ color: "#1a202c" }}>Plot {p.plot_number}</span>
+                    {((p.project as any)?.project_name) && (
+                      <>
+                        <span className="text-gray-300 font-normal">/</span>
+                        <span style={{ color: "#22c55e" }}>Project {(p.project as any).project_name}</span>
+                      </>
+                    )}
+                  </div>
+                  {((p.project as any)?.location) && (
+                    <p className="text-xs text-gray-400 mt-0.5">{(p.project as any).location}</p>
                   )}
+                  {(p as any).deadline && (() => {
+                    const day = Number(String((p as any).deadline).split("-")[2] ?? "0");
+                    const ord = day === 1 ? "1st" : day === 2 ? "2nd" : day === 3 ? "3rd" : `${day}th`;
+                    return <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#f97316" }}>Deadline: {ord} of every month</p>;
+                  })()}
                 </div>
                 <div className="text-right flex-shrink-0">
                   <p className="font-bold text-sm" style={{ color: "#6366f1" }}>{fmtKESFull(p.price)}</p>
@@ -5194,9 +5201,15 @@ function PaymentsPage() {
   // Filters
   const [yearF, setYearF] = useState<number | "all">("all");
   const [purposeF, setPurposeF] = useState("");
+  const [projectF, setProjectF] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
+  const [projects, setProjects] = useState<{ id: number; project_name: string }[]>([]);
+
+  useEffect(() => {
+    supabase.from("projects").select("id, project_name").order("project_name").then(({ data }) => setProjects(data ?? []));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -5220,6 +5233,11 @@ function PaymentsPage() {
     : payments;
 
   const filtered = memberPayments.filter((p) => {
+    if (projectF && purposeF === "Plot Payment") {
+      // Filter by project: comment contains the project name
+      const proj = projects.find((pr) => String(pr.id) === projectF);
+      if (proj && !(p.comment ?? "").toLowerCase().includes(proj.project_name.toLowerCase())) return false;
+    }
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -5300,12 +5318,22 @@ function PaymentsPage() {
           {YEAR_OPTS.map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
         {/* Purpose */}
-        <select value={purposeF} onChange={(e) => setPurposeF(e.target.value)}
+        <select value={purposeF} onChange={(e) => { setPurposeF(e.target.value); setProjectF(""); }}
           className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white"
           style={{ borderColor: "var(--border)" }}>
           <option value="">All Purposes</option>
-          {PAYMENT_PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+          <option value="Contribution">Contribution</option>
+          <option value="Plot Payment">Plot Payment</option>
         </select>
+        {/* Project filter — only visible when Plot Payment selected */}
+        {purposeF === "Plot Payment" && (
+          <select value={projectF} onChange={(e) => setProjectF(e.target.value)}
+            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white"
+            style={{ borderColor: "var(--border)" }}>
+            <option value="">All Projects</option>
+            {projects.map((pr) => <option key={pr.id} value={String(pr.id)}>{pr.project_name}</option>)}
+          </select>
+        )}
         {/* Date range */}
         <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
           className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white"
@@ -5313,8 +5341,8 @@ function PaymentsPage() {
         <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
           className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white"
           style={{ borderColor: "var(--border)" }} placeholder="To" />
-        {(yearF !== "all" || purposeF || dateFrom || dateTo || search) && (
-          <button onClick={() => { setYearF("all"); setPurposeF(""); setDateFrom(""); setDateTo(""); setSearch(""); }}
+        {(yearF !== "all" || purposeF || projectF || dateFrom || dateTo || search) && (
+          <button onClick={() => { setYearF("all"); setPurposeF(""); setProjectF(""); setDateFrom(""); setDateTo(""); setSearch(""); }}
             className="text-xs text-teal-600 hover:underline flex-shrink-0">Clear</button>
         )}
       </div>
@@ -5347,7 +5375,7 @@ function PaymentsPage() {
                 return (
                   <tr key={p.id} className="border-t hover:bg-gray-50 transition-colors"
                     style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
-                    <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">{fmtDate(p.date_paid)}</td>
+                    <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">{fmtDateTime((p as any).created_at || p.date_paid)}</td>
                     <td className="px-3 py-2 font-bold whitespace-nowrap" style={{ color: "#14b8a6" }}>{fmtKESFull(Number(p.amount))}</td>
                     <td className="px-3 py-2">
                       <div className="font-semibold text-xs" style={{ color: "#1a202c" }}>{p.paid_by}</div>
@@ -6456,7 +6484,7 @@ function ContributionDetail({
                             {isRefund && <span className="mr-1">↩</span>}{row.label}
                           </td>
                           {/* Date */}
-                          <td className="px-3 py-1.5 text-xs text-gray-500 whitespace-nowrap">{row.date ? fmtDate(row.date) : "—"}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-500 whitespace-nowrap">{row.date ? fmtDateTime(row.date) : "—"}</td>
                           {/* Amount */}
                           <td className="px-3 py-1.5 font-bold text-xs whitespace-nowrap" style={{ color: isRefund ? "#dc2626" : "#22c55e" }}>
                             {isRefund ? `− ${fmtKESFull(row.amount)}` : fmtKESFull(row.amount)}
@@ -7517,14 +7545,15 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── Automated plot deadline reminders (5d / 2d / 1d / due today) ────────────
+  // ── Automated plot deadline reminders (5d / 1d / due today, deadline day each month) ───
   useEffect(() => {
     if (!authReady) return;
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
+    const todayEAT = new Date(Date.now() + 3 * 60 * 60 * 1000); // EAT = UTC+3
+    const todayStr = todayEAT.toISOString().split("T")[0];
     const storageKey = `sacco_plot_rem_last_${todayStr}`;
-    // Only fire once per calendar day
     if (localStorage.getItem(storageKey)) return;
+    // Mark as processed immediately to prevent double-fire from remounts
+    localStorage.setItem(storageKey, "1");
 
     const run = async () => {
       try {
@@ -7543,26 +7572,32 @@ export default function App() {
 
         const resolvePhone = async (memberId: number, directPhone: string | null | undefined): Promise<string | null> => {
           if (directPhone?.trim()) return directPhone.trim();
-          const { data: up } = await supabase
-            .from("user_profiles")
-            .select("email")
-            .eq("member_id", memberId)
-            .maybeSingle();
+          const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", memberId).maybeSingle();
           if (!up?.email) return null;
           return up.email.replace(/@.*$/, "") || null;
         };
 
         const msPerDay = 24 * 60 * 60 * 1000;
-        const THRESHOLDS = [5, 2, 1, 0];
+        const THRESHOLDS = [5, 1, 0];
+        // Today in EAT, strip to midnight
+        const todayMs = Date.UTC(todayEAT.getUTCFullYear(), todayEAT.getUTCMonth(), todayEAT.getUTCDate());
 
         for (const plot of plots) {
           const balance = Number(plot.price) - Number(plot.paid_amount ?? 0);
           if (balance <= 0 || !plot.deadline) continue;
 
-          const deadlineDate = new Date(plot.deadline);
-          deadlineDate.setHours(23, 59, 59, 0);
-          const daysLeft = Math.round((deadlineDate.getTime() - today.setHours(0, 0, 0, 0)) / msPerDay);
+          // Extract the deadline DAY from the stored date (e.g. "2026-09-16" → 16)
+          const deadlineDay = Number(plot.deadline.split("-")[2] ?? "0");
+          if (!deadlineDay) continue;
 
+          // Build this month's due date (EAT-aware)
+          const eatYear  = todayEAT.getUTCFullYear();
+          const eatMonth = todayEAT.getUTCMonth(); // 0-indexed
+          let dueMs = Date.UTC(eatYear, eatMonth, deadlineDay);
+          // If already past this month's due date, use next month
+          if (todayMs > dueMs) dueMs = Date.UTC(eatYear, eatMonth + 1, deadlineDay);
+
+          const daysLeft = Math.round((dueMs - todayMs) / msPerDay);
           if (!THRESHOLDS.includes(daysLeft)) continue;
 
           // Per-plot per-day per-threshold dedup
@@ -7570,53 +7605,126 @@ export default function App() {
           if (localStorage.getItem(sentKey)) continue;
 
           const role = plot.assigned_to_type === "shareholder" ? "shareholders" : "clients";
-          const { data: member } = await supabase
-            .from(role)
-            .select("id, name, phone")
-            .eq("id", plot.assigned_to_id)
-            .maybeSingle();
+          const { data: member } = await supabase.from(role).select("id, name, phone").eq("id", plot.assigned_to_id).maybeSingle();
           if (!member) continue;
 
           const phone = await resolvePhone(member.id, member.phone);
           if (!phone) continue;
 
-          const firstName = member.name.split(" ")[0];
-          const deadlineLabel = deadlineDate.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-
-          const triggerMap: Record<number, string> = {
-            5: "sms_reminder_5d",
-            2: "sms_reminder_2d",
-            1: "sms_reminder_1d",
-            0: "sms_reminder_0d",
-          };
+          const triggerMap: Record<number, string> = { 5: "sms_plot_reminder_5d", 1: "sms_plot_reminder_1d", 0: "sms_plot_reminder_0d" };
           const triggerId = triggerMap[daysLeft];
           if (cfg.smsTriggers[triggerId] === false) continue;
 
-          const templateMap: Record<number, string> = {
-            5: "Dear {firstName}, your plot {plotNumber} payment is due in 5 days ({deadline}). Please pay to avoid late fees. - Egemeo Ardhi",
-            2: "Dear {firstName}, your plot {plotNumber} payment is due in 2 days ({deadline}). Please pay to avoid late fees. - Egemeo Ardhi",
-            1: "Dear {firstName}, your plot {plotNumber} payment is due TOMORROW ({deadline}). Please pay today. - Egemeo Ardhi",
-            0: "Dear {firstName}, your plot {plotNumber} payment is due TODAY ({deadline}). Pay now to avoid being marked late. - Egemeo Ardhi",
-          };
-          // Use custom template from settings if available, otherwise fallback
-          const tplKey = `plot_deadline_reminder_${daysLeft}d`;
-          const customTpl = cfg.messageTemplates?.[tplKey];
-          const message = (customTpl?.trim() || templateMap[daysLeft])
-            .replace("{firstName}", firstName)
-            .replace("{plotNumber}", plot.plot_number ?? String(plot.id))
-            .replace("{deadline}", deadlineLabel);
+          const ordinal = (n: number) => n === 1 ? "1st" : n === 2 ? "2nd" : n === 3 ? "3rd" : `${n}th`;
+          const deadlineDayLabel = ordinal(deadlineDay);
+
+          const { smsTemplates: _tpls } = await import("@/lib/sms");
+          const firstName = member.name.split(" ")[0];
+          const message = _tpls.plotReminder(firstName, plot.plot_number ?? String(plot.id), deadlineDayLabel, daysLeft);
 
           try {
             await _sendSms(phone, message, triggerId, cfg);
             localStorage.setItem(sentKey, "1");
-          } catch { /* silent — don't block on individual failures */ }
+          } catch { /* silent */ }
         }
-        localStorage.setItem(storageKey, "1");
       } catch { /* silent */ }
     };
 
-    // Delay slightly to not block the initial render
     const t = setTimeout(run, 5000);
+    return () => clearTimeout(t);
+  }, [authReady]);
+
+  // ── Automated contribution reminders (5d / 1d / due today before 10th of each month) ──
+  useEffect(() => {
+    if (!authReady) return;
+    const todayEAT = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const todayStr = todayEAT.toISOString().split("T")[0];
+    const storageKey = `sacco_contrib_rem_last_${todayStr}`;
+    if (localStorage.getItem(storageKey)) return;
+    localStorage.setItem(storageKey, "1");
+
+    const run = async () => {
+      try {
+        const { loadSmsSettingsFromSupabase: _loadSms, sendSms: _sendSms, smsTemplates: _tpls, SMS_TRIGGERS: _TRIG } = await import("@/lib/sms");
+        const cfg = await _loadSms();
+        if (!cfg.smsEnabled) return;
+
+        // Contribution due date = 10th of the next calendar month (EAT)
+        const eatYear  = todayEAT.getUTCFullYear();
+        const eatMonth = todayEAT.getUTCMonth(); // 0-indexed
+        const eatDay   = todayEAT.getUTCDate();
+        const todayMs  = Date.UTC(eatYear, eatMonth, eatDay);
+
+        // Next occurrence of the 10th
+        let dueMs = Date.UTC(eatYear, eatMonth, 10);
+        if (todayMs > dueMs) dueMs = Date.UTC(eatYear, eatMonth + 1, 10);
+
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const daysLeft = Math.round((dueMs - todayMs) / msPerDay);
+        const THRESHOLDS = [5, 1, 0];
+        if (!THRESHOLDS.includes(daysLeft)) return;
+
+        // Billing period month that is due on this 10th
+        const dueDate = new Date(dueMs);
+        const billingMonth0 = dueDate.getUTCMonth() - 1; // month before the 10th
+        const billingYear   = billingMonth0 < 0 ? dueDate.getUTCFullYear() - 1 : dueDate.getUTCFullYear();
+        const billingMonthNum = ((billingMonth0 % 12) + 12) % 12 + 1; // 1-indexed
+
+        const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+        const monthLabel = `${MONTHS_FULL[billingMonthNum - 1]} ${billingYear}`;
+
+        // Fetch active shareholders who haven't paid this billing month
+        const { data: shareholders } = await supabase
+          .from("shareholders")
+          .select("id, name, phone")
+          .neq("status", "Inactive");
+        if (!shareholders?.length) return;
+
+        const shIds = shareholders.map((s: any) => s.id);
+        const { data: paid } = await supabase
+          .from("contributions")
+          .select("shareholder_id")
+          .in("shareholder_id", shIds)
+          .eq("month", billingMonthNum)
+          .eq("year", billingYear);
+        const paidSet = new Set((paid ?? []).map((c: any) => c.shareholder_id));
+
+        const triggerMap: Record<number, string> = {
+          5: _TRIG.reminder5d,
+          1: _TRIG.reminder1d,
+          0: _TRIG.reminderToday,
+        };
+        const triggerId = triggerMap[daysLeft];
+        if (cfg.smsTriggers[triggerId] === false) return;
+
+        const resolvePhone = async (memberId: number, directPhone: string | null | undefined): Promise<string | null> => {
+          if (directPhone?.trim()) return directPhone.trim();
+          const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", memberId).maybeSingle();
+          if (!up?.email) return null;
+          return up.email.replace(/@.*$/, "") || null;
+        };
+
+        for (const sh of shareholders) {
+          if (paidSet.has(sh.id)) continue; // already paid this month
+
+          const sentKey = `sacco_contrib_rem_${sh.id}_${daysLeft}d_${todayStr}`;
+          if (localStorage.getItem(sentKey)) continue;
+
+          const phone = await resolvePhone(sh.id, sh.phone);
+          if (!phone) continue;
+
+          const firstName = sh.name.split(" ")[0];
+          const message = _tpls.reminder(firstName, monthLabel, daysLeft);
+
+          try {
+            await _sendSms(phone, message, triggerId, cfg);
+            localStorage.setItem(sentKey, "1");
+          } catch { /* silent */ }
+        }
+      } catch { /* silent */ }
+    };
+
+    const t = setTimeout(run, 8000); // offset from plot reminders
     return () => clearTimeout(t);
   }, [authReady]);
 

@@ -1077,16 +1077,35 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
       <div className="px-4 py-3">
         <div className="flex items-start justify-between gap-2">
           <div>
-            {onNavigatePlot ? (
-              <button onClick={onNavigatePlot} className="font-bold text-sm hover:underline underline-offset-2 text-left transition-colors hover:opacity-70" style={{ color: "#6366f1" }}>{plot.plot_number}</button>
-            ) : (
-             <p className="font-bold text-sm" style={{ color: "#1a202c" }}>{plot.plot_number}</p>
+            <div className="flex items-center gap-1 flex-wrap font-bold text-sm">
+              {onNavigatePlot ? (
+                <button onClick={onNavigatePlot} className="hover:underline underline-offset-2 transition-colors hover:opacity-70" style={{ color: "#6366f1" }}>
+                  Plot {plot.plot_number}
+                </button>
+              ) : (
+                <span style={{ color: "#1a202c" }}>Plot {plot.plot_number}</span>
+              )}
+              {(plot.project as any)?.project_name && (
+                <>
+                  <span className="text-gray-300 font-normal">/</span>
+                  {onNavigateProject ? (
+                    <button onClick={onNavigateProject} className="hover:underline underline-offset-1 transition-colors" style={{ color: "#22c55e" }}>
+                      Project {(plot.project as any).project_name}
+                    </button>
+                  ) : (
+                    <span style={{ color: "#22c55e" }}>Project {(plot.project as any).project_name}</span>
+                  )}
+                </>
+              )}
+            </div>
+            {(plot.project as any)?.location && (
+              <p className="text-xs text-gray-400 mt-0.5">{(plot.project as any).location}</p>
             )}
-            {onNavigateProject && (plot.project as any)?.project_name ? (
-              <button onClick={onNavigateProject} className="text-xs hover:underline underline-offset-1 text-left transition-colors" style={{ color: "#22c55e" }}>{(plot.project as any).project_name}</button>
-            ) : (
-              <p className="text-xs text-gray-400">{(plot.project as any)?.project_name ?? "—"}</p>
-            )}
+            {plot.deadline && (() => {
+              const day = Number(plot.deadline.split("-")[2] ?? "0");
+              const ord = day === 1 ? "1st" : day === 2 ? "2nd" : day === 3 ? "3rd" : `${day}th`;
+              return <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#f97316" }}>Deadline: {ord} of every month</p>;
+            })()}
           </div>
           <div className="text-right flex-shrink-0">
             <p className="font-bold text-sm" style={{ color: "#6366f1" }}>{fmtKESFull(price)}</p>

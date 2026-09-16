@@ -23,15 +23,19 @@ export interface SmsSettings {
 // ─── Trigger IDs ──────────────────────────────────────────────────────────────
 
 export const SMS_TRIGGERS = {
-  newUser:          "sms_new_user",
-  contribReceipt:   "sms_contrib_receipt",
-  plotAssigned:     "sms_plot_assigned",
-  plotReceipt:      "sms_plot_receipt",
-  reminder5d:       "sms_reminder_5d",
-  reminder2d:       "sms_reminder_2d",
-  reminder1d:       "sms_reminder_1d",
-  reminderToday:    "sms_reminder_0d",
-  passwordReminder: "sms_password_reminder",
+  newUser:             "sms_new_user",
+  contribReceipt:      "sms_contrib_receipt",
+  plotAssigned:        "sms_plot_assigned",
+  plotReceipt:         "sms_plot_receipt",
+  // Contribution reminders (due on 10th of each month)
+  reminder5d:          "sms_reminder_5d",
+  reminder1d:          "sms_reminder_1d",
+  reminderToday:       "sms_reminder_0d",
+  // Plot payment reminders (due on deadline day each month)
+  plotReminder5d:      "sms_plot_reminder_5d",
+  plotReminder1d:      "sms_plot_reminder_1d",
+  plotReminderToday:   "sms_plot_reminder_0d",
+  passwordReminder:    "sms_password_reminder",
 } as const;
 
 // ─── Default message templates ────────────────────────────────────────────────
@@ -47,14 +51,20 @@ export const DEFAULT_TEMPLATES: Record<string, string> = {
     "Dear {name}, plot {plotNo} in {project} has been assigned to you. Total: {amount}. Welcome! - Egemeo Ardhi ",
   sms_password_reminder:
     "Dear {name}, your password is your phone number: {phone}. Please log in and change it. - Egemeo Ardhi ",
+  // Contribution reminders (due 10th of every month)
   sms_reminder_5d:
-    "Dear {name}, your {month} contribution is due in 5 days. Pay on time to avoid late fees. - Egemeo Ardhi ",
-  sms_reminder_2d:
-    "Dear {name}, your {month} contribution is due in 2 days. Pay on time to avoid late fees. - Egemeo Ardhi ",
+    "Dear {name}, your {month} contribution is due in 5 days (10th). Pay on time to avoid late fees. - Egemeo Ardhi",
   sms_reminder_1d:
-    "Dear {name}, your {month} contribution is due TOMORROW. Please pay today to avoid being marked late. - Egemeo Ardhi ",
+    "Dear {name}, your {month} contribution is due TOMORROW (10th). Please pay today to avoid being marked late. - Egemeo Ardhi",
   sms_reminder_0d:
-    "Dear {name}, your {month} contribution is due TODAY. Pay now to avoid being marked late. - Egemeo Ardhi ",
+    "Dear {name}, your {month} contribution is due TODAY (10th). Pay now to avoid being marked late. - Egemeo Ardhi",
+  // Plot payment reminders (due on deadline day each month)
+  sms_plot_reminder_5d:
+    "Dear {name}, your plot {plotNumber} payment is due in 5 days ({deadlineDay}). Please pay to avoid late fees. - Egemeo Ardhi",
+  sms_plot_reminder_1d:
+    "Dear {name}, your plot {plotNumber} payment is due TOMORROW ({deadlineDay}). Please pay today. - Egemeo Ardhi",
+  sms_plot_reminder_0d:
+    "Dear {name}, your plot {plotNumber} payment is due TODAY ({deadlineDay}). Pay now to avoid being marked late. - Egemeo Ardhi",
 };
 
 // Substitute {variable} placeholders in a template string
@@ -239,8 +249,14 @@ export const smsTemplates = {
   reminder: (name: string, month: string, daysUntil: number) => {
     const id = daysUntil === 0 ? SMS_TRIGGERS.reminderToday
              : daysUntil === 1 ? SMS_TRIGGERS.reminder1d
-             : daysUntil <= 2  ? SMS_TRIGGERS.reminder2d
              :                   SMS_TRIGGERS.reminder5d;
     return interpolate(getTpl(id), { name, month, days: String(daysUntil) });
+  },
+
+  plotReminder: (name: string, plotNumber: string, deadlineDay: string, daysUntil: number) => {
+    const id = daysUntil === 0 ? SMS_TRIGGERS.plotReminderToday
+             : daysUntil === 1 ? SMS_TRIGGERS.plotReminder1d
+             :                   SMS_TRIGGERS.plotReminder5d;
+    return interpolate(getTpl(id), { name, plotNumber, deadlineDay, days: String(daysUntil) });
   },
 };

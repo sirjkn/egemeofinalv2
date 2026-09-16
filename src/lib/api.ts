@@ -583,7 +583,7 @@ export interface PaymentPayload {
   shareholder_id?: number;
 }
 
-export const PAYMENT_PURPOSES = ["Contribution", "Plot Payment", "Registration Fee", "Loan Repayment", "Penalty", "Other"] as const;
+export const PAYMENT_PURPOSES = ["Contribution", "Plot Payment"] as const;
 export const PAYMENT_MODES    = ["Cash", "Mpesa", "Bank", "Cheque"] as const;
 
 export const paymentsApi = {

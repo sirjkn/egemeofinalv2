@@ -5239,7 +5239,7 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
     if (!testPhone.trim()) return;
     setTesting(true); setTestResult(null);
     try {
-      await sendSms(testPhone.trim(), `Egemeo Ardhi SACCO — SMS test successful! (${new Date().toLocaleTimeString()})`, undefined, cfg);
+      await sendSms(testPhone.trim(), `Dear {firstName}, this is a reminder to make your contribution on or before {deadline}. Regards, Egemeo Ardhi (${new Date().toLocaleTimeString()})`, undefined, cfg);
       const isSandbox = cfg.providerConfig.provider === "africastalking" && cfg.providerConfig.africastalking.username === "sandbox";
       setTestResult({
         ok: !isSandbox,
@@ -5422,31 +5422,45 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
     },
     {
       id: SMS_TRIGGERS.reminder5d,
-      label: "Reminder — 5 days", icon: "📅",
-      desc: "5 days before monthly contribution is due",
+      label: "Contribution Reminder — 5 days before 10th", icon: "📅",
+      desc: "Sent on the 5th — 5 days before the 10th contribution due date",
       vars: ["name", "month", "days"],
-      example: { name: "John", month: "January 2025", days: "5" },
-    },
-    {
-      id: SMS_TRIGGERS.reminder2d,
-      label: "Reminder — 2 days", icon: "📅",
-      desc: "2 days before monthly contribution is due",
-      vars: ["name", "month", "days"],
-      example: { name: "John", month: "January 2025", days: "2" },
+      example: { name: "John", month: "October 2026", days: "5" },
     },
     {
       id: SMS_TRIGGERS.reminder1d,
-      label: "Reminder — 1 day", icon: "⏰",
-      desc: "1 day before monthly contribution is due",
+      label: "Contribution Reminder — 1 day before 10th", icon: "⏰",
+      desc: "Sent on the 9th — 1 day before the 10th contribution due date",
       vars: ["name", "month"],
-      example: { name: "John", month: "January 2025" },
+      example: { name: "John", month: "October 2026" },
     },
     {
       id: SMS_TRIGGERS.reminderToday,
-      label: "Reminder — Due today", icon: "🔔",
-      desc: "On the day the monthly contribution is due",
+      label: "Contribution Reminder — Due today (10th)", icon: "🔔",
+      desc: "Sent on the 10th — the day contributions are due",
       vars: ["name", "month"],
-      example: { name: "John", month: "January 2025" },
+      example: { name: "John", month: "October 2026" },
+    },
+    {
+      id: SMS_TRIGGERS.plotReminder5d,
+      label: "Plot Reminder — 5 days before deadline", icon: "🏡",
+      desc: "Sent 5 days before the monthly plot payment deadline day",
+      vars: ["name", "plotNumber", "deadlineDay", "days"],
+      example: { name: "John", plotNumber: "14", deadlineDay: "16th", days: "5" },
+    },
+    {
+      id: SMS_TRIGGERS.plotReminder1d,
+      label: "Plot Reminder — 1 day before deadline", icon: "🏡",
+      desc: "Sent 1 day before the monthly plot payment deadline day",
+      vars: ["name", "plotNumber", "deadlineDay"],
+      example: { name: "John", plotNumber: "14", deadlineDay: "16th" },
+    },
+    {
+      id: SMS_TRIGGERS.plotReminderToday,
+      label: "Plot Reminder — Due today", icon: "🔔",
+      desc: "Sent on the plot payment deadline day each month",
+      vars: ["name", "plotNumber", "deadlineDay"],
+      example: { name: "John", plotNumber: "14", deadlineDay: "16th" },
     },
   ];
 
@@ -5594,6 +5608,36 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
               {testResult.ok ? "✓ " : "✗ "}{testResult.msg}
             </p>
           )}
+        </div>
+
+        {/* Reminder Schedule Rules */}
+        <div className="rounded-xl border overflow-hidden" style={{ borderColor: "#bfdbfe", background: "#eff6ff" }}>
+          <div className="px-4 py-3 flex items-center gap-2 border-b" style={{ borderColor: "#bfdbfe" }}>
+            <Bell size={13} className="text-blue-600 flex-shrink-0" />
+            <span className="text-xs font-bold text-blue-800">Automated Reminder Schedule</span>
+          </div>
+          <div className="px-4 py-3 grid md:grid-cols-2 gap-3 text-xs text-blue-800">
+            <div>
+              <p className="font-bold mb-1 text-blue-900">📅 Contribution Reminders (3 per month)</p>
+              <p className="text-blue-700">Due date: 10th of every month</p>
+              <ul className="mt-1 space-y-0.5 text-blue-700">
+                <li>• <strong>5th</strong> — 5 days before (e.g. Oct 5 for Oct 10 deadline)</li>
+                <li>• <strong>9th</strong> — 1 day before (e.g. Oct 9)</li>
+                <li>• <strong>10th</strong> — due date reminder</li>
+              </ul>
+              <p className="mt-1 text-blue-600">Only sent to members who have not yet paid.</p>
+            </div>
+            <div>
+              <p className="font-bold mb-1 text-blue-900">🏡 Plot Payment Reminders (3 per month)</p>
+              <p className="text-blue-700">Due date: deadline day set on each plot assignment</p>
+              <ul className="mt-1 space-y-0.5 text-blue-700">
+                <li>• <strong>5 days before</strong> the monthly deadline day</li>
+                <li>• <strong>1 day before</strong> the deadline day</li>
+                <li>• <strong>On the deadline day</strong></li>
+              </ul>
+              <p className="mt-1 text-blue-600">Only sent to plots with outstanding balance.</p>
+            </div>
+          </div>
         </div>
 
         {/* Notification Types + Message Templates */}
