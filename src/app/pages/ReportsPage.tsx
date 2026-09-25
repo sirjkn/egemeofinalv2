@@ -79,7 +79,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   const [search,   setSearch]   = useState("");
 
   // ── contributions-specific filter state ─────────────────────────────────
-  const [contribStatusF, setContribStatusF] = useState<"all" | "unpaid">("all");
+  const [contribStatusF, setContribStatusF] = useState<"all" | "paid" | "unpaid">("all");
 
   // ── profits-specific filter state ────────────────────────────────────────
   const [projectF,  setProjectF]  = useState("");
@@ -116,29 +116,57 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         setRows(data ?? []);
 
       } else if (type === "contributions") {
-        if (contribStatusF === "unpaid") {
-          // Fetch all active shareholders + contributions for the period, then find unpaid
-          const [allSH, summaries] = await Promise.all([
-            shareholdersApi.list({ status: "Active" }),
-            contributionsApi.summaryByShareholder({
-              year:  yearF === "all" ? undefined : yearF,
-              month: monthF === "all" ? undefined : monthF,
-            }),
-          ]);
-          // Build a set of shareholder IDs that have at least one contribution with amount >= 1
-          const paidIds = new Set<number>();
-          summaries.forEach((s) => {
-            const hasValid = s.contributions.some((c) => Number(c.amount) >= 1);
-            if (hasValid) paidIds.add(s.shareholder.id);
-          });
-          // Shareholders not in paidIds are "unpaid"
-          const unpaidRows = allSH
-            .filter((sh: any) => !paidIds.has(sh.id))
+        // Always work from active shareholders only
+        const eatNow = new Date(new Date().getTime() + 3 * 60 * 60 * 1000);
+        const checkYear  = yearF  === "all" ? eatNow.getUTCFullYear()     : Number(yearF);
+        const checkMonth = monthF === "all" ? eatNow.getUTCMonth() + 1    : Number(monthF);
+
+        // Fetch active shareholders + contributions for the period (specific month/year)
+        const [activeSH, contribRes] = await Promise.all([
+          shareholdersApi.list({ status: "Active" }),
+          supabase
+            .from("contributions")
+            .select("*")
+            .eq("year", checkYear)
+            .eq("month", checkMonth)
+            .gte("amount", 1),
+        ]);
+
+        const activeIds = new Set<number>(activeSH.map((sh: any) => sh.id));
+        // Map shareholder id → consolidated single row (sum multiple payments per member)
+        const contribByShId = new Map<number, any>();
+        for (const c of (contribRes.data ?? [])) {
+          if (!activeIds.has(Number(c.shareholder_id))) continue;
+          const sh = activeSH.find((s: any) => s.id === Number(c.shareholder_id));
+          if (!sh) continue;
+          const existing = contribByShId.get(c.shareholder_id);
+          if (existing) {
+            // Merge: sum amounts, keep latest payment_date, escalate to "late" if any is late
+            existing.amount = Number(existing.amount) + Number(c.amount);
+            if (c.payment_date && (!existing.payment_date || c.payment_date > existing.payment_date)) {
+              existing.payment_date = c.payment_date;
+            }
+            if (c.status === "late") existing.status = "late";
+            if (c.notes) existing.notes = existing.notes ? `${existing.notes}; ${c.notes}` : c.notes;
+          } else {
+            contribByShId.set(c.shareholder_id, { ...c, shareholder: sh, amount: Number(c.amount) });
+          }
+        }
+
+        if (contribStatusF === "paid") {
+          // Active shareholders who have paid for this period
+          const paidRows: any[] = [];
+          contribByShId.forEach((row) => paidRows.push(row));
+          setRows(paidRows);
+        } else if (contribStatusF === "unpaid") {
+          // Active shareholders who have NOT paid for this period
+          const unpaidRows = activeSH
+            .filter((sh: any) => !contribByShId.has(sh.id))
             .map((sh: any) => ({
               id: `unpaid-${sh.id}`,
               shareholder: sh,
-              month: monthF === "all" ? null : monthF,
-              year: yearF === "all" ? null : yearF,
+              month: checkMonth,
+              year:  checkYear,
               payment_date: null,
               amount: 0,
               status: "unpaid",
@@ -146,12 +174,26 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
             }));
           setRows(unpaidRows);
         } else {
-          const summaries = await contributionsApi.summaryByShareholder({
-            year:  yearF === "all" ? undefined : yearF,
-            month: monthF === "all" ? undefined : monthF,
-          });
-          const flat = summaries.flatMap((s) => s.contributions.map((c) => ({ ...c, shareholder: s.shareholder })));
-          setRows(flat);
+          // "all" — All active members: paid ones with their consolidated row, unpaid ones as unpaid row
+          const allRows: any[] = [];
+          for (const sh of activeSH) {
+            const consolidated = contribByShId.get(sh.id);
+            if (consolidated) {
+              allRows.push(consolidated);
+            } else {
+              allRows.push({
+                id: `unpaid-${sh.id}`,
+                shareholder: sh,
+                month: checkMonth,
+                year:  checkYear,
+                payment_date: null,
+                amount: 0,
+                status: "unpaid",
+                notes: "",
+              });
+            }
+          }
+          setRows(allRows);
         }
 
       } else if (type === "payments") {
@@ -360,10 +402,14 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       )}
       {/* Contribution payment status */}
       {type === "contributions" && (
-        <select value={contribStatusF} onChange={(e) => setContribStatusF(e.target.value as "all" | "unpaid")}
+        <select value={contribStatusF} onChange={(e) => setContribStatusF(e.target.value as "all" | "paid" | "unpaid")}
           className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white"
-          style={{ borderColor: contribStatusF === "unpaid" ? "#ef4444" : "var(--border)", color: contribStatusF === "unpaid" ? "#ef4444" : undefined }}>
-          <option value="all">All Payments</option>
+          style={{
+            borderColor: contribStatusF === "unpaid" ? "#ef4444" : contribStatusF === "paid" ? "#16a34a" : "var(--border)",
+            color: contribStatusF === "unpaid" ? "#ef4444" : contribStatusF === "paid" ? "#16a34a" : undefined,
+          }}>
+          <option value="all">All Members</option>
+          <option value="paid">Paid</option>
           <option value="unpaid">Unpaid</option>
         </select>
       )}
@@ -416,10 +462,21 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     if (loading) return <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-gray-300" /></div>;
 
     if (type === "contributions") {
-      const isUnpaidView = contribStatusF === "unpaid";
+      const paidCount   = filtered.filter((c: any) => c.status !== "unpaid").length;
+      const unpaidCount = filtered.filter((c: any) => c.status === "unpaid").length;
       const total = filtered.reduce((s: number, c: any) => s + Number(c.amount), 0);
       return (
         <>
+          {/* Summary pills */}
+          <div className="flex items-center gap-3 px-5 py-2.5 border-b flex-shrink-0" style={{ borderColor: "var(--border)" }}>
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: "#f0fdf4", color: "#16a34a" }}>
+              {paidCount} Paid
+            </span>
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full" style={{ background: "#fef2f2", color: "#ef4444" }}>
+              {unpaidCount} Unpaid
+            </span>
+            <span className="text-xs text-gray-400">{filtered.length} total active members</span>
+          </div>
           <div className="overflow-x-auto flex-1">
             <table className="w-full text-sm min-w-[700px]">
               <thead style={{ background: "#1e3a5f" }}>
@@ -453,12 +510,12 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
                 ))}
               </tbody>
               <tfoot>
-                <tr style={{ background: isUnpaidView ? "#fef2f2" : "#f0fdf4" }}>
-                  <td colSpan={5} className="px-3 py-1.5 text-xs font-bold uppercase" style={{ color: isUnpaidView ? "#b91c1c" : "#15803d" }}>
-                    {isUnpaidView ? `${filtered.length} unpaid member${filtered.length !== 1 ? "s" : ""}` : "Total"}
+                <tr style={{ background: "#f0fdf4" }}>
+                  <td colSpan={5} className="px-3 py-1.5 text-xs font-bold uppercase" style={{ color: "#15803d" }}>
+                    Total Collected
                   </td>
-                  <td className="px-3 py-1.5 font-bold" style={{ color: isUnpaidView ? "#b91c1c" : "#14532d" }}>
-                    {isUnpaidView ? "KES 0" : fmtKESFull(total)}
+                  <td className="px-3 py-1.5 font-bold" style={{ color: "#14532d" }}>
+                    {fmtKESFull(total)}
                   </td>
                   <td colSpan={2} />
                 </tr>

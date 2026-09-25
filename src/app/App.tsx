@@ -1488,7 +1488,7 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
     }
 
     const structuredNotes = JSON.stringify({
-      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : "Cash",
+      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : method === "commission" ? "Commission" : "Cash",
       ref: ref ?? "",
       paidBy: payerName,
       phone: payerPhone,
@@ -3268,7 +3268,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     }
 
     const structuredNotes = JSON.stringify({
-      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : "Cash",
+      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : method === "commission" ? "Commission" : "Cash",
       ref: ref ?? "",
       paidBy: payerName,
       phone: payerPhone,
@@ -4434,7 +4434,7 @@ function MyPlotsPage() {
           }
 
           const structuredNotes = JSON.stringify({
-            method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : "Cash",
+            method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : method === "commission" ? "Commission" : "Cash",
             ref: reference ?? "",
             paidBy: payerName,
             phone: payerPhone,
@@ -5611,7 +5611,7 @@ function AddPaymentModal({ initial, onClose, onSave }: {
 
 // ─── Universal Payment Modal ──────────────────────────────────────────────────
 
-type PayMethod = "cash" | "mpesa" | "bank" | "cheque";
+type PayMethod = "cash" | "mpesa" | "bank" | "cheque" | "commission";
 
 interface PaymentModalProps {
   amount: number;
@@ -5624,10 +5624,11 @@ interface PaymentModalProps {
 }
 
 const METHOD_META: Record<PayMethod, { label: string; icon: string; color: string; bg: string }> = {
-  cash:   { label: "Cash",   icon: "💵", color: "#16a34a", bg: "#f0fdf4" },
-  mpesa:  { label: "M-Pesa", icon: "📱", color: "#22c55e", bg: "#f0fdf4" },
-  bank:   { label: "Bank",   icon: "🏦", color: "#2563eb", bg: "#eff6ff" },
-  cheque: { label: "Cheque", icon: "📝", color: "#7c3aed", bg: "#f5f3ff" },
+  cash:       { label: "Cash",       icon: "💵", color: "#16a34a", bg: "#f0fdf4" },
+  mpesa:      { label: "M-Pesa",     icon: "📱", color: "#22c55e", bg: "#f0fdf4" },
+  bank:       { label: "Bank",       icon: "🏦", color: "#2563eb", bg: "#eff6ff" },
+  cheque:     { label: "Cheque",     icon: "📝", color: "#7c3aed", bg: "#f5f3ff" },
+  commission: { label: "Commission", icon: "🤝", color: "#b45309", bg: "#fef3c7" },
 };
 
 function PaymentModal({ amount, description, memberName, memberPhone, accountRef, onComplete, onClose }: PaymentModalProps) {
@@ -5637,11 +5638,11 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
     if (!isAdmin) return ["mpesa"];
     const cfg = getPaymentSettings();
     const extra = (["cash", "bank", "cheque"] as const).filter((m) => cfg.methods[m]);
-    return [...new Set(["mpesa", ...extra])] as PayMethod[];
+    return [...new Set(["mpesa", ...extra, "commission"])] as PayMethod[];
   });
   useEffect(() => {
     if (!isAdmin) { setAvailableMethods(["mpesa"]); return; }
-    getEnabledPaymentMethodKeys().then((keys) => setAvailableMethods(keys as PayMethod[])).catch(() => {});
+    getEnabledPaymentMethodKeys().then((keys) => setAvailableMethods([...keys as PayMethod[], "commission"])).catch(() => {});
   }, [isAdmin]);
   const [method, setMethod] = useState<PayMethod>(isAdmin ? "cash" : "mpesa");
   const [reference, setReference] = useState("");

@@ -1,13 +1,15 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Calendar, MapPin, Users, DollarSign, BarChart2,
   Plus, Search, Edit2, X, TrendingUp, TrendingDown,
-  ChevronLeft, ChevronRight, Target, Activity, Trash2, Eye,
+  ChevronLeft, ChevronRight, Target, Activity, Trash2, Eye, AlertTriangle,
 } from "lucide-react";
 import {
   BarChart as RechartBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { fmtKES, fmtKESFull, fmtDate } from "@/app/shared";
+import { supabase } from "@/lib/supabase";
+import { logActivity } from "@/lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -152,12 +154,32 @@ const EMPTY_EVENT: Omit<LeadEvent, "id"> = {
 };
 
 function EventsSection() {
-  const [calYear,   setCalYear]   = useState(new Date().getFullYear());
-  const [events,    setEvents]    = useState<LeadEvent[]>(SEED_EVENTS);
-  const [editing,   setEditing]   = useState<LeadEvent | null>(null);
-  const [formData,  setFormData]  = useState<Omit<LeadEvent, "id">>(EMPTY_EVENT);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [viewEvent, setViewEvent] = useState<LeadEvent | null>(null);
+  const [calYear,      setCalYear]      = useState(new Date().getFullYear());
+  const [events,       setEvents]       = useState<LeadEvent[]>(SEED_EVENTS);
+  const [editing,      setEditing]      = useState<LeadEvent | null>(null);
+  const [formData,     setFormData]     = useState<Omit<LeadEvent, "id">>(EMPTY_EVENT);
+  const [panelOpen,    setPanelOpen]    = useState(false);
+  const [viewEvent,    setViewEvent]    = useState<LeadEvent | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<LeadEvent | null>(null);
+  const [deleting,     setDeleting]     = useState(false);
+
+  // Load events from DB; fall back to seed data if table doesn't exist yet
+  useEffect(() => {
+    supabase.from("lead_events").select("*").order("date").then(({ data }) => {
+      if (data && data.length > 0) {
+        setEvents(data.map((r: any) => ({
+          id:           r.id,
+          name:         r.name,
+          location:     r.location,
+          nature:       r.nature,
+          contacts:     Number(r.contacts ?? 0),
+          marketingPax: Number(r.marketing_pax ?? 0),
+          budget:       Number(r.budget ?? 0),
+          date:         r.date,
+        })));
+      }
+    }).catch(() => { /* fall through — seed data stays */ });
+  }, []);
 
   const eventDates = useMemo(() => new Set(events.map((e) => e.date)), [events]);
 
@@ -171,20 +193,43 @@ function EventsSection() {
     setFormData({ name: ev.name, location: ev.location, nature: ev.nature, contacts: ev.contacts, marketingPax: ev.marketingPax, budget: ev.budget, date: ev.date });
     setPanelOpen(true);
   };
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name.trim() || !formData.date) return;
+    const dbRow = {
+      name:          formData.name,
+      location:      formData.location,
+      nature:        formData.nature,
+      contacts:      formData.contacts,
+      marketing_pax: formData.marketingPax,
+      budget:        formData.budget,
+      date:          formData.date,
+    };
     if (editing) {
-      setEvents((prev) => prev.map((e) => e.id === editing.id ? { ...editing, ...formData } : e));
+      const { data } = await supabase.from("lead_events").update(dbRow).eq("id", editing.id).select().maybeSingle().catch(() => ({ data: null }));
+      const updated: LeadEvent = data
+        ? { id: data.id, name: data.name, location: data.location, nature: data.nature, contacts: Number(data.contacts), marketingPax: Number(data.marketing_pax), budget: Number(data.budget), date: data.date }
+        : { ...editing, ...formData };
+      setEvents((prev) => prev.map((e) => e.id === editing.id ? updated : e));
     } else {
-      const nextId = Math.max(0, ...events.map((e) => e.id)) + 1;
-      setEvents((prev) => [...prev, { id: nextId, ...formData }]);
+      const { data } = await supabase.from("lead_events").insert(dbRow).select().maybeSingle().catch(() => ({ data: null }));
+      const nextId = data?.id ?? (Math.max(0, ...events.map((e) => e.id)) + 1);
+      const newEv: LeadEvent = { id: nextId, ...formData };
+      setEvents((prev) => [...prev, newEv]);
     }
     setPanelOpen(false);
   };
   const handleClear = () => { setFormData(EMPTY_EVENT); setEditing(null); };
-  const deleteEvent = (id: number) => {
-    if (!window.confirm("Delete this event? This cannot be undone.")) return;
-    setEvents((prev) => prev.filter((e) => e.id !== id));
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await supabase.from("lead_events").delete().eq("id", deleteTarget.id);
+      setEvents((prev) => prev.filter((e) => e.id !== deleteTarget.id));
+      logActivity({ category: "other", action: "delete", description: `Event "${deleteTarget.name}" deleted`, meta: { event_id: deleteTarget.id } });
+    } catch { /* best-effort — still remove from local state */ }
+    setDeleting(false);
+    setDeleteTarget(null);
   };
 
   const totals = useMemo(() => ({
@@ -293,7 +338,7 @@ function EventsSection() {
                         <button onClick={() => setViewEvent(ev)} className="p-1.5 rounded hover:bg-teal-50 transition-colors" title="View">
                           <Eye size={13} color="#0f9d8f" />
                         </button>
-                        <button onClick={() => deleteEvent(ev.id)} className="p-1.5 rounded hover:bg-red-50 transition-colors" title="Delete">
+                        <button onClick={() => setDeleteTarget(ev)} className="p-1.5 rounded hover:bg-red-50 transition-colors" title="Delete">
                           <Trash2 size={13} color="#ef4444" />
                         </button>
                       </div>
@@ -341,6 +386,40 @@ function EventsSection() {
                 className="px-4 text-xs font-semibold py-2.5 rounded-lg border hover:bg-gray-50"
                 style={{ color: "#64748b", borderColor: "#e2e8f0" }}
               >Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={20} color="#ef4444" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold" style={{ color: "#172033" }}>Delete Event</h3>
+                <p className="text-xs mt-0.5" style={{ color: "#64748b" }}>This action is permanent and cannot be undone.</p>
+              </div>
+            </div>
+            <p className="text-xs mb-5 p-3 rounded-lg" style={{ background: "#fef2f2", color: "#991b1b" }}>
+              You are about to permanently delete <strong>"{deleteTarget.name}"</strong> and all associated data.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={confirmDelete}
+                disabled={deleting}
+                className="flex-1 text-xs font-bold py-2.5 rounded-lg text-white hover:opacity-90 disabled:opacity-60"
+                style={{ background: "#ef4444" }}
+              >{deleting ? "Deleting…" : "Yes, Delete Event"}</button>
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="px-4 text-xs font-semibold py-2.5 rounded-lg border hover:bg-gray-50"
+                style={{ color: "#64748b", borderColor: "#e2e8f0" }}
+              >Cancel</button>
             </div>
           </div>
         </div>
@@ -425,13 +504,14 @@ function LeadsSection() {
   const [selMonth,setSelMonth]= useState(today.getMonth());
   const [leads,      setLeads]      = useState<Lead[]>(SEED_LEADS);
   const [events]                   = useState<LeadEvent[]>(SEED_EVENTS);
-  const [search,     setSearch]    = useState("");
-  const [addOpen,    setAddOpen]   = useState(false);
-  const [newLead,    setNewLead]   = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
-  const [editOpen,   setEditOpen]  = useState(false);
-  const [editTarget, setEditTarget]= useState<Lead | null>(null);
-  const [editForm,   setEditForm]  = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
-  const [viewTarget, setViewTarget]= useState<Lead | null>(null);
+  const [search,           setSearch]          = useState("");
+  const [activeEventFilter, setActiveEventFilter] = useState<number | null>(null);
+  const [addOpen,          setAddOpen]         = useState(false);
+  const [newLead,          setNewLead]         = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+  const [editOpen,         setEditOpen]        = useState(false);
+  const [editTarget,       setEditTarget]      = useState<Lead | null>(null);
+  const [editForm,         setEditForm]        = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+  const [viewTarget,       setViewTarget]      = useState<Lead | null>(null);
 
   const monthEvents = useMemo(() =>
     events.filter((e) => {
@@ -442,10 +522,11 @@ function LeadsSection() {
 
   const filteredLeads = useMemo(() =>
     leads.filter((l) => {
+      if (activeEventFilter !== null && l.eventId !== activeEventFilter) return false;
       const q = search.toLowerCase();
       return !q || `${l.firstName} ${l.lastName} ${l.phone} ${l.email}`.toLowerCase().includes(q);
     }),
-  [leads, search]);
+  [leads, search, activeEventFilter]);
 
   const addLead = () => {
     if (!newLead.firstName.trim() || !newLead.phone.trim()) return;
@@ -522,25 +603,55 @@ function LeadsSection() {
       {/* Event Filter */}
       {monthEvents.length > 0 && (
         <div className="bg-white rounded-lg border p-3 mb-4" style={{ borderColor: "#e2e8f0" }}>
-          <p className="text-[11px] font-bold uppercase tracking-wide mb-2" style={{ color: "#64748b" }}>
-            Events in {MONTHS_SHORT[selMonth]} {selYear}:
-          </p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: "#64748b" }}>
+              Events in {MONTHS_SHORT[selMonth]} {selYear}: <span className="normal-case font-normal">(click to filter leads)</span>
+            </p>
+            {activeEventFilter !== null && (
+              <button
+                onClick={() => setActiveEventFilter(null)}
+                className="text-[10px] font-semibold px-2 py-0.5 rounded-full border"
+                style={{ color: "#ef4444", borderColor: "#fecaca", background: "#fef2f2" }}
+              >Clear filter ×</button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-2">
-            {monthEvents.map((ev, i) => (
-              <span key={ev.id} className="text-xs px-2.5 py-1 rounded-full font-medium" style={{ background: "#f1f5f9", color: "#334155" }}>
-                Event {i + 1}: {ev.name} ({new Date(ev.date).getDate()} {MONTHS_SHORT[new Date(ev.date).getMonth()]})
-              </span>
-            ))}
+            {monthEvents.map((ev, i) => {
+              const isActive = activeEventFilter === ev.id;
+              return (
+                <button
+                  key={ev.id}
+                  onClick={() => setActiveEventFilter(isActive ? null : ev.id)}
+                  className="text-xs px-2.5 py-1 rounded-full font-medium transition-all border"
+                  style={isActive
+                    ? { background: "#0f9d8f", color: "#fff", borderColor: "#0f9d8f", boxShadow: "0 0 0 2px #0f9d8f40" }
+                    : { background: "#f1f5f9", color: "#334155", borderColor: "#e2e8f0" }
+                  }
+                >
+                  Event {i + 1}: {ev.name} ({new Date(ev.date).getDate()} {MONTHS_SHORT[new Date(ev.date).getMonth()]})
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* Pipeline */}
       <div className="mb-4">
-        <h3 className="text-sm font-bold mb-3" style={{ color: "#172033" }}>Pipeline View (Sales Funnel)</h3>
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="text-sm font-bold" style={{ color: "#172033" }}>Pipeline View (Sales Funnel)</h3>
+          {activeEventFilter !== null && (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: "#0f9d8f20", color: "#0f9d8f" }}>
+              Filtered: {getEventName(activeEventFilter)}
+            </span>
+          )}
+        </div>
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(5, 1fr)" }}>
           {PIPELINE_STAGES.map(({ id, label, color, bg }) => {
-            const stageLeads = leads.filter((l) => l.status === id);
+            const baseLeads = activeEventFilter !== null
+              ? leads.filter((l) => l.eventId === activeEventFilter)
+              : leads;
+            const stageLeads = baseLeads.filter((l) => l.status === id);
             return (
               <div key={id} className="rounded-lg border overflow-hidden" style={{ borderColor: "#e2e8f0" }}>
                 <div className="px-3 py-2" style={{ background: bg, borderBottom: `2px solid ${color}` }}>
@@ -594,24 +705,33 @@ function LeadsSection() {
               <button onClick={() => setAddOpen(false)}><X size={15} color="#94a3b8" /></button>
             </div>
             <div className="flex flex-col gap-3">
-              {[
+              {([
                 { key: "firstName", label: "First Name", placeholder: "e.g. Olivia" },
                 { key: "lastName",  label: "Last Name",  placeholder: "e.g. Auma" },
                 { key: "phone",     label: "Phone",      placeholder: "+254..." },
                 { key: "email",     label: "Email",      placeholder: "email@example.com" },
-                { key: "note",      label: "Note",       placeholder: "Any note..." },
-              ].map(({ key, label, placeholder }) => (
+              ] as { key: keyof typeof newLead; label: string; placeholder: string }[]).map(({ key, label, placeholder }) => (
                 <div key={key}>
                   <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>{label}</label>
                   <input
                     className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-purple-400"
                     style={{ borderColor: "#e2e8f0" }}
                     placeholder={placeholder}
-                    value={String(newLead[key as keyof typeof newLead] ?? "")}
+                    value={String(newLead[key] ?? "")}
                     onChange={(e) => setNewLead((p) => ({ ...p, [key]: e.target.value }))}
                   />
                 </div>
               ))}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>NOTE</label>
+                <textarea
+                  className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-purple-400 resize-y"
+                  style={{ borderColor: "#e2e8f0", minHeight: "72px" }}
+                  placeholder="Any note... (press Enter for new line)"
+                  value={newLead.note}
+                  onChange={(e) => setNewLead((p) => ({ ...p, note: e.target.value }))}
+                />
+              </div>
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>SOURCE EVENT</label>
                 <select
@@ -650,24 +770,33 @@ function LeadsSection() {
               <button onClick={() => setEditOpen(false)}><X size={15} color="#94a3b8" /></button>
             </div>
             <div className="flex flex-col gap-3">
-              {[
+              {([
                 { key: "firstName", label: "First Name", placeholder: "e.g. Olivia" },
                 { key: "lastName",  label: "Last Name",  placeholder: "e.g. Auma" },
                 { key: "phone",     label: "Phone",      placeholder: "+254..." },
                 { key: "email",     label: "Email",      placeholder: "email@example.com" },
-                { key: "note",      label: "Note",       placeholder: "Any note..." },
-              ].map(({ key, label, placeholder }) => (
+              ] as { key: keyof typeof editForm; label: string; placeholder: string }[]).map(({ key, label, placeholder }) => (
                 <div key={key}>
                   <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>{label}</label>
                   <input
                     className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     style={{ borderColor: "#e2e8f0" }}
                     placeholder={placeholder}
-                    value={String(editForm[key as keyof typeof editForm] ?? "")}
+                    value={String(editForm[key] ?? "")}
                     onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))}
                   />
                 </div>
               ))}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>NOTE</label>
+                <textarea
+                  className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                  style={{ borderColor: "#e2e8f0", minHeight: "72px" }}
+                  placeholder="Any note... (press Enter for new line)"
+                  value={editForm.note}
+                  onChange={(e) => setEditForm((p) => ({ ...p, note: e.target.value }))}
+                />
+              </div>
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>SOURCE EVENT</label>
                 <select
@@ -772,7 +901,7 @@ function LeadsSection() {
                     <td className="px-4 py-2.5 font-mono" style={{ color: "#475569" }}>{lead.phone}</td>
                     <td className="px-4 py-2.5" style={{ color: "#475569" }}>{lead.email}</td>
                     <td className="px-4 py-2.5" style={{ color: "#475569" }}>{getEventName(lead.eventId)}</td>
-                    <td className="px-4 py-2.5 max-w-[180px]" style={{ color: "#64748b" }}>{lead.note}</td>
+                    <td className="px-4 py-2.5" style={{ color: "#64748b", minWidth: "220px", maxWidth: "320px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{lead.note}</td>
                     <td className="px-4 py-2.5">
                       <select
                         className="text-[11px] font-semibold border rounded px-2 py-0.5 focus:outline-none"
