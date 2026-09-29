@@ -2770,20 +2770,9 @@ function ProjectDetailView({
 
     // Load plots
     try {
+      // listByProject now reconciles paid_amount internally from plot_payments
       const p = await plotsApi.listByProject(project.id);
-
-      // Reconcile paid_amount against actual plot_payments so reassigned plots
-      // always show their full payment history rather than the reset value.
-      const assignedIds = p.filter((pl) => pl.assigned_to_id != null).map((pl) => pl.id);
-      let reconciled = p;
-      if (assignedIds.length > 0) {
-        const updates = await plotsApi.reconcilePaidAmounts(assignedIds).catch(() => []);
-        if (updates.length > 0) {
-          const map = new Map(updates.map((u) => [u.id, u.paid_amount]));
-          reconciled = p.map((pl) => map.has(pl.id) ? { ...pl, paid_amount: map.get(pl.id)! } : pl);
-        }
-      }
-      setPlots(reconciled);
+      setPlots(p);
 
       // Load co-owners for all plots
       const coMap: Record<number, PlotCoOwner[]> = {};

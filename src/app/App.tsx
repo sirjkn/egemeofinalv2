@@ -290,7 +290,7 @@ function MemberFormModal({ title, accentColor, initial, onClose, onSave }: Membe
     const e: Record<string, string> = {};
     if (!form.name.trim()) e.name = "Full name is required";
     if (!form.phone.trim()) e.phone = "Phone number is required";
-    else if (!/^(0[0-9]{9}|\+?254[0-9]{9})$/.test(form.phone.trim().replace(/[\s\-()]/g, ""))) e.phone = "Enter a valid phone number (e.g. 0712345678 or +254712345678)";
+    else if (!/^\+?\d{6,15}$/.test(form.phone.trim().replace(/[\s\-().]/g, ""))) e.phone = "Enter a valid phone number";
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Invalid email";
     return e;
   };
@@ -3353,10 +3353,9 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
       const pays  = payRes.data  ?? [];
 
-      // For clients/investors: reconcile paid_amount from actual plot_payments records
-      // so this dashboard is always correct regardless of whether admin has opened the project.
+      // Reconcile paid_amount from actual plot_payments records for all member types.
       let plots = plotRes.data ?? [];
-      if (!isSH && plots.length > 0) {
+      if (plots.length > 0) {
         const plotIds = plots.map((pl: any) => pl.id as number);
         const { data: allPmts } = await supabase
           .from("plot_payments")
@@ -4293,7 +4292,27 @@ function MyPlotsPage() {
   const loadPlots = useCallback(() => {
     if (!profile.member_id || profile.role === "investor") { setLoading(false); return; }
     plotsApi.listByMember(profile.member_id, profile.role as "shareholder" | "client")
-      .then((data) => setPlots(data))
+      .then(async (data) => {
+        if (!data.length) { setPlots(data); return; }
+        // Reconcile paid_amount from actual plot_payments so the display is always accurate
+        const plotIds = data.map((pl) => pl.id);
+        const { data: pmts } = await supabase.from("plot_payments").select("plot_id, amount").in("plot_id", plotIds);
+        if (pmts?.length) {
+          const sums: Record<number, number> = {};
+          for (const id of plotIds) sums[id] = 0;
+          for (const r of pmts) sums[Number(r.plot_id)] = (sums[Number(r.plot_id)] ?? 0) + Number(r.amount);
+          const reconciled = data.map((pl) => {
+            const correct = sums[pl.id] ?? Number(pl.paid_amount ?? 0);
+            if (correct !== Number(pl.paid_amount ?? 0)) {
+              supabase.from("plots").update({ paid_amount: correct }).eq("id", pl.id).then(() => {});
+            }
+            return { ...pl, paid_amount: correct };
+          });
+          setPlots(reconciled);
+        } else {
+          setPlots(data);
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [profile.member_id, profile.role]);

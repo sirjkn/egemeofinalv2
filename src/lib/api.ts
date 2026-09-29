@@ -996,11 +996,31 @@ export const plotsApi = {
       .select("*")
       .eq("project_id", project_id).order("plot_number");
     if (error) throw new Error(error.message);
-    // Sort numerically by the trailing number in plot_number (e.g. "PROJECT1-Plot10" → 10)
-    return (data ?? []).sort((a, b) => {
+    const plots = (data ?? []).sort((a, b) => {
       const num = (s: string) => parseInt(s.match(/(\d+)$/)?.[1] ?? "0", 10);
       return num(a.plot_number) - num(b.plot_number);
     });
+    // Recalculate paid_amount from actual plot_payments — fixes any drift
+    if (plots.length > 0) {
+      const ids = plots.map((p) => p.id);
+      const { data: pmts } = await supabase.from("plot_payments").select("plot_id, amount").in("plot_id", ids);
+      if (pmts && pmts.length > 0) {
+        const sums: Record<number, number> = {};
+        for (const r of pmts) {
+          const pid = Number(r.plot_id);
+          sums[pid] = (sums[pid] ?? 0) + Number(r.amount);
+        }
+        return plots.map((pl) => {
+          const correct = sums[pl.id];
+          if (correct !== undefined && correct !== Number(pl.paid_amount ?? 0)) {
+            supabase.from("plots").update({ paid_amount: correct }).eq("id", pl.id).then(() => {});
+            return { ...pl, paid_amount: correct };
+          }
+          return pl;
+        });
+      }
+    }
+    return plots;
   },
 
   listByMember: async (member_id: number, member_type: "shareholder" | "client"): Promise<(Plot & { project?: Project; isCoOwner?: boolean })[]> => {
@@ -1018,6 +1038,26 @@ export const plotsApi = {
     const seen = new Set(primary.map((p) => p.id));
     const merged = [...primary];
     for (const p of coPrimary) { if (!seen.has(p.id)) { seen.add(p.id); merged.push(p); } }
+    // Recalculate paid_amount from actual plot_payments — fixes any drift
+    if (merged.length > 0) {
+      const ids = merged.map((p) => p.id);
+      const { data: pmts } = await supabase.from("plot_payments").select("plot_id, amount").in("plot_id", ids);
+      if (pmts && pmts.length > 0) {
+        const sums: Record<number, number> = {};
+        for (const r of pmts) {
+          const pid = Number(r.plot_id);
+          sums[pid] = (sums[pid] ?? 0) + Number(r.amount);
+        }
+        return merged.map((pl) => {
+          const correct = sums[pl.id];
+          if (correct !== undefined && correct !== Number(pl.paid_amount ?? 0)) {
+            supabase.from("plots").update({ paid_amount: correct }).eq("id", pl.id).then(() => {});
+            return { ...pl, paid_amount: correct };
+          }
+          return pl;
+        });
+      }
+    }
     return merged;
   },
 
@@ -1057,18 +1097,18 @@ export const plotsApi = {
   },
 
   recordPayment: async (plot_id: number, amount: number, notes?: string, payment_date?: string): Promise<Plot> => {
-    const { data: plot } = await supabase.from("plots").select("paid_amount").eq("id", plot_id).single();
-    const newPaid = Number(plot?.paid_amount ?? 0) + amount;
-    const { data, error } = await supabase.from("plots").update({ paid_amount: newPaid }).eq("id", plot_id).select().single();
-    if (error) throw new Error(error.message);
-
-    // Penalty is NOT auto-calculated; admin adds manually via plotPaymentsApi.addPenalty()
+    // Insert the payment record FIRST so the sum below includes it
     await supabase.from("plot_payments").insert({
       plot_id, amount, notes: notes ?? null,
       payment_date: payment_date ?? new Date().toISOString().slice(0, 10),
       penalty_amount: 0,
       penalty_status: "none",
     });
+    // Recalculate paid_amount by summing ALL plot_payments — self-heals any prior drift
+    const { data: pmts } = await supabase.from("plot_payments").select("amount").eq("plot_id", plot_id);
+    const newPaid = (pmts ?? []).reduce((s: number, p: any) => s + Number(p.amount), 0);
+    const { data, error } = await supabase.from("plots").update({ paid_amount: newPaid }).eq("id", plot_id).select().single();
+    if (error) throw new Error(error.message);
     return data;
   },
 

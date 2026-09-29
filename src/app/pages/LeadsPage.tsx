@@ -53,30 +53,6 @@ const STATUS_BADGE: Record<PipelineStatus, { label: string; color: string; borde
   lost:           { label: "LOST / DEAD",    color: "#ef4444", border: "#fecaca" },
 };
 
-// ─── Seed data ────────────────────────────────────────────────────────────────
-
-const SEED_EVENTS: LeadEvent[] = [
-  { id: 1, name: "Nairobi Plot Expo",       location: "KICC",           nature: "Exhibition / Sales",          contacts: 42, marketingPax: 150, budget: 180000, date: "2026-08-24" },
-  { id: 2, name: "Mombasa Site Visit",      location: "Mtwapa",         nature: "Client Tour / Booking",       contacts: 18, marketingPax: 80,  budget: 120000, date: "2026-09-05" },
-  { id: 3, name: "Kajiado Open Day",        location: "Kajiado Town",   nature: "Land Handover Ceremony",      contacts: 29, marketingPax: 120, budget: 95000,  date: "2026-09-18" },
-  { id: 4, name: "Egemeo Sacco AGM",        location: "Laico Regency",  nature: "Member Sensitization",        contacts: 65, marketingPax: 250, budget: 350000, date: "2026-10-12" },
-  { id: 5, name: "Ruiru Site Open",         location: "Ruiru",          nature: "Site Open Day",               contacts: 30, marketingPax: 100, budget: 80000,  date: "2026-08-28" },
-  { id: 6, name: "Machakos Roadshow",       location: "Machakos Town",  nature: "Sales Roadshow",              contacts: 22, marketingPax: 90,  budget: 75000,  date: "2026-08-30" },
-];
-
-const SEED_LEADS: Lead[] = [
-  { id: 1,  firstName: "Olivia",  lastName: "Auma",    phone: "+254744555015", email: "olivia.a@gmail.com",       eventId: 1, note: "Interested in 1/8 acre",        status: "contacts" },
-  { id: 2,  firstName: "Mary",    lastName: "Wanjiku", phone: "+254722333013", email: "wanjiku.m@gmail.com",      eventId: 1, note: "Needs financing options",        status: "contacts" },
-  { id: 3,  firstName: "Peter",   lastName: "Njau",    phone: "+254711222012", email: "peter.njau@gmail.com",     eventId: 5, note: "Wants corner plot",              status: "contacts" },
-  { id: 4,  firstName: "James",   lastName: "Mwangi",  phone: "+254712345678", email: "j.mwangi@yahoo.com",       eventId: 1, note: "Requested site visit map",       status: "contacted" },
-  { id: 5,  firstName: "Mercy",   lastName: "Chebet",  phone: "+254724356789", email: "mercy.c@gmail.com",        eventId: 6, note: "Called twice, interested",       status: "contacted" },
-  { id: 6,  firstName: "Denis",   lastName: "Kiprop",  phone: "+254734567890", email: "kiprop.d@outlook.com",     eventId: 5, note: "Scheduled for Saturday Tour",    status: "site_scheduled" },
-  { id: 7,  firstName: "Anne",    lastName: "Waithera",phone: "+254745678901", email: "anne.w@gmail.com",         eventId: 6, note: "Tour on 15 Sep",                 status: "site_scheduled" },
-  { id: 8,  firstName: "John",    lastName: "Kamau",   phone: "+254756789012", email: "kamau.j@egemeo.co.ke",     eventId: 6, note: "Paid booking deposit Ksh 50k",   status: "converted" },
-  { id: 9,  firstName: "Lydia",   lastName: "Atieno",  phone: "+254767890123", email: "lydia.a@gmail.com",        eventId: 1, note: "Full payment in progress",        status: "converted" },
-  { id: 10, firstName: "Sarah",   lastName: "Wambui",  phone: "+254778901234", email: "s.wambui@gmail.com",       eventId: 2, note: "Unreachable after 3 attempts",   status: "lost" },
-];
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -155,7 +131,7 @@ const EMPTY_EVENT: Omit<LeadEvent, "id"> = {
 
 function EventsSection() {
   const [calYear,      setCalYear]      = useState(new Date().getFullYear());
-  const [events,       setEvents]       = useState<LeadEvent[]>(SEED_EVENTS);
+  const [events,       setEvents]       = useState<LeadEvent[]>([]);
   const [editing,      setEditing]      = useState<LeadEvent | null>(null);
   const [formData,     setFormData]     = useState<Omit<LeadEvent, "id">>(EMPTY_EVENT);
   const [panelOpen,    setPanelOpen]    = useState(false);
@@ -163,22 +139,20 @@ function EventsSection() {
   const [deleteTarget, setDeleteTarget] = useState<LeadEvent | null>(null);
   const [deleting,     setDeleting]     = useState(false);
 
-  // Load events from DB; fall back to seed data if table doesn't exist yet
+  // Load events from DB — no seed fallback so deletes are permanent
   useEffect(() => {
     supabase.from("lead_events").select("*").order("date").then(({ data }) => {
-      if (data && data.length > 0) {
-        setEvents(data.map((r: any) => ({
-          id:           r.id,
-          name:         r.name,
-          location:     r.location,
-          nature:       r.nature,
-          contacts:     Number(r.contacts ?? 0),
-          marketingPax: Number(r.marketing_pax ?? 0),
-          budget:       Number(r.budget ?? 0),
-          date:         r.date,
-        })));
-      }
-    }).catch(() => { /* fall through — seed data stays */ });
+      setEvents((data ?? []).map((r: any) => ({
+        id:           r.id,
+        name:         r.name,
+        location:     r.location,
+        nature:       r.nature,
+        contacts:     Number(r.contacts ?? 0),
+        marketingPax: Number(r.marketing_pax ?? 0),
+        budget:       Number(r.budget ?? 0),
+        date:         r.date,
+      })));
+    }).catch(() => { setEvents([]); });
   }, []);
 
   const eventDates = useMemo(() => new Set(events.map((e) => e.date)), [events]);
@@ -502,8 +476,8 @@ function LeadsSection() {
   const today     = new Date();
   const [selYear, setSelYear] = useState(today.getFullYear());
   const [selMonth,setSelMonth]= useState(today.getMonth());
-  const [leads,      setLeads]      = useState<Lead[]>(SEED_LEADS);
-  const [events]                   = useState<LeadEvent[]>(SEED_EVENTS);
+  const [leads,      setLeads]      = useState<Lead[]>([]);
+  const [events,     setLeadEvents] = useState<LeadEvent[]>([]);
   const [search,           setSearch]          = useState("");
   const [activeEventFilter, setActiveEventFilter] = useState<number | null>(null);
   const [addOpen,          setAddOpen]         = useState(false);
@@ -512,6 +486,27 @@ function LeadsSection() {
   const [editTarget,       setEditTarget]      = useState<Lead | null>(null);
   const [editForm,         setEditForm]        = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
   const [viewTarget,       setViewTarget]      = useState<Lead | null>(null);
+  const [deleteLeadTarget, setDeleteLeadTarget]= useState<Lead | null>(null);
+  const [deletingLead,     setDeletingLead]    = useState(false);
+
+  // Load leads and events from DB on mount — no seed fallback
+  useEffect(() => {
+    supabase.from("lead_events").select("*").order("date").then(({ data }) => {
+      setLeadEvents((data ?? []).map((r: any) => ({
+        id: r.id, name: r.name, location: r.location, nature: r.nature,
+        contacts: Number(r.contacts ?? 0), marketingPax: Number(r.marketing_pax ?? 0),
+        budget: Number(r.budget ?? 0), date: r.date,
+      })));
+    }).catch(() => {});
+    supabase.from("lead_contacts").select("*").order("id").then(({ data }) => {
+      setLeads((data ?? []).map((r: any) => ({
+        id: r.id, firstName: r.first_name, lastName: r.last_name ?? "",
+        phone: r.phone ?? "", email: r.email ?? "",
+        eventId: Number(r.event_id ?? 0), note: r.note ?? "",
+        status: (r.status ?? "contacts") as PipelineStatus,
+      })));
+    }).catch(() => {});
+  }, []);
 
   const monthEvents = useMemo(() =>
     events.filter((e) => {
@@ -528,9 +523,15 @@ function LeadsSection() {
     }),
   [leads, search, activeEventFilter]);
 
-  const addLead = () => {
+  const toDbRow = (l: Omit<Lead, "id">) => ({
+    first_name: l.firstName, last_name: l.lastName, phone: l.phone,
+    email: l.email, event_id: l.eventId || null, note: l.note, status: l.status,
+  });
+
+  const addLead = async () => {
     if (!newLead.firstName.trim() || !newLead.phone.trim()) return;
-    const nextId = Math.max(0, ...leads.map((l) => l.id)) + 1;
+    const { data } = await supabase.from("lead_contacts").insert(toDbRow(newLead)).select().maybeSingle().catch(() => ({ data: null }));
+    const nextId = data?.id ?? (Math.max(0, ...leads.map((l) => l.id)) + 1);
     setLeads((prev) => [...prev, { id: nextId, ...newLead }]);
     setAddOpen(false);
     setNewLead({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
@@ -538,6 +539,7 @@ function LeadsSection() {
 
   const changeStatus = (leadId: number, status: PipelineStatus) => {
     setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, status } : l));
+    supabase.from("lead_contacts").update({ status }).eq("id", leadId).then(() => {});
   };
 
   const openEditLead = (lead: Lead) => {
@@ -545,15 +547,22 @@ function LeadsSection() {
     setEditForm({ firstName: lead.firstName, lastName: lead.lastName, phone: lead.phone, email: lead.email, eventId: lead.eventId, note: lead.note, status: lead.status });
     setEditOpen(true);
   };
-  const saveEditLead = () => {
+  const saveEditLead = async () => {
     if (!editForm.firstName.trim() || !editForm.phone.trim() || !editTarget) return;
+    await supabase.from("lead_contacts").update(toDbRow(editForm)).eq("id", editTarget.id).catch(() => {});
     setLeads((prev) => prev.map((l) => l.id === editTarget.id ? { ...l, ...editForm } : l));
     setEditOpen(false);
     setEditTarget(null);
   };
-  const deleteLead = (id: number) => {
-    if (!window.confirm("Delete this lead? This cannot be undone.")) return;
-    setLeads((prev) => prev.filter((l) => l.id !== id));
+  const deleteLead = (lead: Lead) => { setDeleteLeadTarget(lead); };
+  const confirmDeleteLead = async () => {
+    if (!deleteLeadTarget) return;
+    setDeletingLead(true);
+    await supabase.from("lead_contacts").delete().eq("id", deleteLeadTarget.id).catch(() => {});
+    setLeads((prev) => prev.filter((l) => l.id !== deleteLeadTarget.id));
+    logActivity({ category: "other", action: "delete", description: `Lead "${deleteLeadTarget.firstName} ${deleteLeadTarget.lastName}" deleted`, meta: { lead_id: deleteLeadTarget.id } });
+    setDeletingLead(false);
+    setDeleteLeadTarget(null);
   };
 
   const getEventName = (id: number) => events.find((e) => e.id === id)?.name ?? "—";
@@ -922,7 +931,7 @@ function LeadsSection() {
                         <button onClick={() => setViewTarget(lead)} className="p-1.5 rounded hover:bg-teal-50 transition-colors" title="View">
                           <Eye size={13} color="#0f9d8f" />
                         </button>
-                        <button onClick={() => deleteLead(lead.id)} className="p-1.5 rounded hover:bg-red-50 transition-colors" title="Delete">
+                        <button onClick={() => deleteLead(lead)} className="p-1.5 rounded hover:bg-red-50 transition-colors" title="Delete">
                           <Trash2 size={13} color="#ef4444" />
                         </button>
                       </div>
@@ -934,6 +943,27 @@ function LeadsSection() {
           </table>
         </div>
       </div>
+
+      {/* Delete Lead Confirmation */}
+      {deleteLeadTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.4)" }}>
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-80">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle size={18} color="#ef4444" />
+              <h3 className="text-sm font-bold" style={{ color: "#172033" }}>Delete Contact</h3>
+            </div>
+            <p className="text-xs mb-4" style={{ color: "#64748b" }}>
+              Permanently delete <strong>{deleteLeadTarget.firstName} {deleteLeadTarget.lastName}</strong>? This cannot be undone.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setDeleteLeadTarget(null)} className="flex-1 text-xs font-semibold py-2 rounded-lg border" style={{ color: "#64748b", borderColor: "#e2e8f0" }}>Cancel</button>
+              <button onClick={confirmDeleteLead} disabled={deletingLead} className="flex-1 text-xs font-semibold py-2 rounded-lg text-white" style={{ background: "#ef4444" }}>
+                {deletingLead ? "Deleting…" : "Yes, Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
