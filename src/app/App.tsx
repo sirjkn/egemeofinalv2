@@ -3059,8 +3059,8 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               <XAxis dataKey="name" tick={{ fontSize: 9, fill: "#94a3b8" }} angle={-35} textAnchor="end" interval={0} />
               <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickFormatter={(v: number) => `${(v/1e6).toFixed(1)}M`} />
               <Tooltip formatter={(v: number) => fmtKESFull(v)} labelStyle={{ fontSize: 11, fontWeight: 600 }} contentStyle={{ borderRadius: 10, fontSize: 11 }} />
-              <Bar dataKey="cost" name="Cost" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={28} />
-              <Bar dataKey="profit" name="Profit" fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              <Bar key="bar-cost"   dataKey="cost"   name="Cost"   fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
+              <Bar key="bar-profit" dataKey="profit" name="Profit" fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
             </RechartBarChart>
           ) : <ChartSkeleton />}
         </div>
@@ -3661,8 +3661,8 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                   <XAxis dataKey="year" tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
                   <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} width={30} />
                   <Tooltip formatter={(v: any) => [`KES ${Number(v).toLocaleString()}`, "Total"]} contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }} />
-                  <Bar dataKey="amount" fill="#ec4899" radius={[4, 4, 0, 0]}>
-                    <LabelList dataKey="amount" position="top" formatter={(v: any) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} style={{ fontSize: 9, fill: "#be185d", fontWeight: 600 }} />
+                  <Bar key="bar-amount" dataKey="amount" fill="#ec4899" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                    <LabelList key="label-amount" dataKey="amount" position="top" formatter={(v: any) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} style={{ fontSize: 9, fill: "#be185d", fontWeight: 600 }} />
                   </Bar>
                 </RechartBarChart>
               ) : <ChartSkeleton />}
@@ -3685,7 +3685,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                   <XAxis dataKey="month" tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                   <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : String(v)} width={30} />
                   <Tooltip formatter={(v: any) => [`KES ${Number(v).toLocaleString()}`, "Total"]} contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }} />
-                  <Bar dataKey="total" fill="#14b8a6" radius={[4, 4, 0, 0]} />
+                  <Bar key="bar-total" dataKey="total" fill="#14b8a6" radius={[4, 4, 0, 0]} isAnimationActive={false} />
                 </RechartBarChart>
               ) : <ChartSkeleton />}
             </div>

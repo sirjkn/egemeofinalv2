@@ -33,6 +33,7 @@ interface Lead {
   eventId: number;
   note: string;
   status: PipelineStatus;
+  siteVisitDate?: string; // ISO date, only relevant when status = "site_scheduled"
 }
 
 type PipelineStatus = "contacts" | "contacted" | "site_scheduled" | "converted" | "lost";
@@ -254,12 +255,27 @@ function EventsSection() {
         </div>
       </div>
 
-      {/* 12-month calendar — 2 cols on mobile, 3 on sm, 4 on lg */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">
-        {Array.from({ length: 12 }, (_, m) => (
-          <MonthCalendar key={m} year={calYear} month={m} eventDates={eventDates} />
-        ))}
-      </div>
+      {/* Calendar — only months that have events in selected year */}
+      {(() => {
+        const activeMonths = Array.from({ length: 12 }, (_, m) => m).filter((m) =>
+          Array.from(eventDates).some((d) => {
+            const dt = new Date(d);
+            return dt.getFullYear() === calYear && dt.getMonth() === m;
+          })
+        );
+        return activeMonths.length === 0 ? (
+          <div className="flex items-center gap-3 mb-5 p-4 rounded-lg border" style={{ borderColor: "#e2e8f0", background: "#f8fafc" }}>
+            <Calendar size={20} color="#cbd5e1" />
+            <p className="text-xs" style={{ color: "#94a3b8" }}>No events recorded for {calYear}. Add an event to see the calendar.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">
+            {activeMonths.map((m) => (
+              <MonthCalendar key={m} year={calYear} month={m} eventDates={eventDates} />
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">
@@ -460,7 +476,7 @@ function LeadsSection() {
   const [search,      setSearch]     = useState("");
   const [activeEventFilter, setActiveEventFilter] = useState<number | null>(null);
   const [addOpen,     setAddOpen]    = useState(false);
-  const [newLead,     setNewLead]    = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+  const [newLead,     setNewLead]    = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts", siteVisitDate: "" });
   const [editOpen,    setEditOpen]   = useState(false);
   const [editTarget,  setEditTarget] = useState<Lead | null>(null);
   const [editForm,    setEditForm]   = useState<Omit<Lead, "id">>({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
@@ -482,6 +498,7 @@ function LeadsSection() {
         phone: r.phone ?? "", email: r.email ?? "",
         eventId: Number(r.event_id ?? 0), note: r.note ?? "",
         status: (r.status ?? "contacts") as PipelineStatus,
+        siteVisitDate: r.site_visit_date ?? undefined,
       })));
     }).catch(() => {});
   }, []);
@@ -504,30 +521,38 @@ function LeadsSection() {
   const toDbRow = (l: Omit<Lead, "id">) => ({
     first_name: l.firstName, last_name: l.lastName, phone: l.phone,
     email: l.email, event_id: l.eventId || null, note: l.note, status: l.status,
+    site_visit_date: l.status === "site_scheduled" ? (l.siteVisitDate || null) : null,
   });
 
   const addLead = async () => {
     if (!newLead.firstName.trim() || !newLead.phone.trim()) return;
-    const { data } = await supabase.from("lead_contacts").insert(toDbRow(newLead)).select().maybeSingle().catch(() => ({ data: null }));
-    const nextId = data?.id ?? (Math.max(0, ...leads.map((l) => l.id)) + 1);
+    let insertedId: number | undefined;
+    try {
+      const { data } = await supabase.from("lead_contacts").insert(toDbRow(newLead)).select().maybeSingle();
+      insertedId = data?.id;
+    } catch {}
+    const nextId = insertedId ?? (Math.max(0, ...leads.map((l) => l.id)) + 1);
     setLeads((prev) => [...prev, { id: nextId, ...newLead }]);
     setAddOpen(false);
-    setNewLead({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts" });
+    setNewLead({ firstName: "", lastName: "", phone: "", email: "", eventId: 0, note: "", status: "contacts", siteVisitDate: "" });
   };
 
-  const changeStatus = (leadId: number, status: PipelineStatus) => {
-    setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, status } : l));
-    supabase.from("lead_contacts").update({ status }).eq("id", leadId).then(() => {});
+  const changeStatus = (leadId: number, status: PipelineStatus, siteVisitDate?: string) => {
+    const update: Record<string, any> = { status };
+    if (status === "site_scheduled") update.site_visit_date = siteVisitDate || null;
+    else update.site_visit_date = null;
+    setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, status, siteVisitDate: status === "site_scheduled" ? siteVisitDate : undefined } : l));
+    supabase.from("lead_contacts").update(update).eq("id", leadId).then(() => {});
   };
 
   const openEditLead = (lead: Lead) => {
     setEditTarget(lead);
-    setEditForm({ firstName: lead.firstName, lastName: lead.lastName, phone: lead.phone, email: lead.email, eventId: lead.eventId, note: lead.note, status: lead.status });
+    setEditForm({ firstName: lead.firstName, lastName: lead.lastName, phone: lead.phone, email: lead.email, eventId: lead.eventId, note: lead.note, status: lead.status, siteVisitDate: lead.siteVisitDate ?? "" });
     setEditOpen(true);
   };
   const saveEditLead = async () => {
     if (!editForm.firstName.trim() || !editForm.phone.trim() || !editTarget) return;
-    await supabase.from("lead_contacts").update(toDbRow(editForm)).eq("id", editTarget.id).catch(() => {});
+    try { await supabase.from("lead_contacts").update(toDbRow(editForm)).eq("id", editTarget.id); } catch {}
     setLeads((prev) => prev.map((l) => l.id === editTarget.id ? { ...l, ...editForm } : l));
     setEditOpen(false);
     setEditTarget(null);
@@ -536,7 +561,7 @@ function LeadsSection() {
   const confirmDeleteLead = async () => {
     if (!deleteLeadTarget) return;
     setDeletingLead(true);
-    await supabase.from("lead_contacts").delete().eq("id", deleteLeadTarget.id).catch(() => {});
+    try { await supabase.from("lead_contacts").delete().eq("id", deleteLeadTarget.id); } catch {}
     setLeads((prev) => prev.filter((l) => l.id !== deleteLeadTarget.id));
     logActivity({ category: "other", action: "delete", description: `Lead "${deleteLeadTarget.firstName} ${deleteLeadTarget.lastName}" deleted`, meta: { lead_id: deleteLeadTarget.id } });
     setDeletingLead(false);
@@ -629,9 +654,17 @@ function LeadsSection() {
                   </div>
                   <div className="p-2 flex flex-col gap-1.5 min-h-[100px] bg-white">
                     {stageLeads.map((lead) => (
-                      <div key={lead.id} className="rounded border p-2" style={{ borderColor: "#e2e8f0" }}>
+                      <div key={lead.id} className="rounded border p-2" style={{ borderColor: id === "site_scheduled" ? "#bfdbfe" : "#e2e8f0", background: id === "site_scheduled" ? "#f0f7ff" : "white" }}>
                         <div className="text-[11px] font-semibold" style={{ color: "#172033" }}>{lead.firstName} {lead.lastName}</div>
                         <div className="text-[10px] mt-0.5" style={{ color: "#94a3b8" }}>{lead.phone}</div>
+                        {id === "site_scheduled" && (
+                          <div className="flex items-center gap-1 mt-1">
+                            <Calendar size={9} color="#3b82f6" />
+                            <span className="text-[10px] font-semibold" style={{ color: lead.siteVisitDate ? "#1d4ed8" : "#94a3b8" }}>
+                              {lead.siteVisitDate ? fmtDate(lead.siteVisitDate) : "No date set"}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -708,6 +741,25 @@ function LeadsSection() {
                   {events.map((ev) => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#64748b" }}>INITIAL STATUS</label>
+                <select className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-purple-400" style={{ borderColor: "#e2e8f0" }}
+                  value={newLead.status} onChange={(e) => setNewLead((p) => ({ ...p, status: e.target.value as PipelineStatus }))}>
+                  {PIPELINE_STAGES.map((s) => <option key={s.id} value={s.id}>{s.label.replace(" (New)", "")}</option>)}
+                </select>
+              </div>
+              {newLead.status === "site_scheduled" && (
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#3b82f6" }}>SITE VISIT DATE</label>
+                  <input
+                    type="date"
+                    className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    style={{ borderColor: "#bfdbfe" }}
+                    value={newLead.siteVisitDate ?? ""}
+                    onChange={(e) => setNewLead((p) => ({ ...p, siteVisitDate: e.target.value }))}
+                  />
+                </div>
+              )}
             </div>
             <div className="flex gap-2 mt-4">
               <button onClick={addLead} className="flex-1 text-xs font-bold py-2.5 rounded-lg text-white" style={{ background: "#7c3aed" }}>Save Lead</button>
@@ -767,6 +819,18 @@ function LeadsSection() {
                   {PIPELINE_STAGES.map((s) => <option key={s.id} value={s.id}>{s.label.replace(" (New)", "")}</option>)}
                 </select>
               </div>
+              {editForm.status === "site_scheduled" && (
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "#3b82f6" }}>SITE VISIT DATE</label>
+                  <input
+                    type="date"
+                    className="w-full text-xs border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    style={{ borderColor: "#bfdbfe" }}
+                    value={editForm.siteVisitDate ?? ""}
+                    onChange={(e) => setEditForm((p) => ({ ...p, siteVisitDate: e.target.value }))}
+                  />
+                </div>
+              )}
             </div>
             <div className="flex gap-2 mt-4">
               <button onClick={saveEditLead} className="flex-1 text-xs font-bold py-2.5 rounded-lg text-white" style={{ background: "#3b82f6" }}>Save Changes</button>
@@ -785,17 +849,18 @@ function LeadsSection() {
               <button onClick={() => setViewTarget(null)}><X size={15} color="#94a3b8" /></button>
             </div>
             <div className="flex flex-col">
-              {[
+              {([
                 { label: "Full Name",       value: `${viewTarget.firstName} ${viewTarget.lastName}` },
                 { label: "Phone",           value: viewTarget.phone },
                 { label: "Email",           value: viewTarget.email || "—" },
                 { label: "Source Event",    value: getEventName(viewTarget.eventId) },
                 { label: "Note",            value: viewTarget.note || "—" },
                 { label: "Pipeline Status", value: STATUS_BADGE[viewTarget.status].label },
-              ].map(({ label, value }) => (
+                ...(viewTarget.status === "site_scheduled" ? [{ label: "Site Visit Date", value: viewTarget.siteVisitDate ? fmtDate(viewTarget.siteVisitDate) : "Not set" }] : []),
+              ] as { label: string; value: string }[]).map(({ label, value }) => (
                 <div key={label} className="flex justify-between py-2.5 border-b" style={{ borderColor: "#f1f5f9" }}>
-                  <span className="text-[11px] font-semibold flex-shrink-0" style={{ color: "#94a3b8" }}>{label}</span>
-                  <span className="text-xs font-medium text-right ml-4" style={{ color: "#172033", wordBreak: "break-word" }}>{value}</span>
+                  <span className="text-[11px] font-semibold flex-shrink-0" style={{ color: label === "Site Visit Date" ? "#3b82f6" : "#94a3b8" }}>{label}</span>
+                  <span className="text-xs font-medium text-right ml-4" style={{ color: label === "Site Visit Date" ? "#1d4ed8" : "#172033", wordBreak: "break-word", fontWeight: label === "Site Visit Date" ? 700 : 500 }}>{value}</span>
                 </div>
               ))}
             </div>
@@ -823,7 +888,7 @@ function LeadsSection() {
             <table className="w-full text-xs">
               <thead>
                 <tr style={{ background: "#f8fafc" }}>
-                  {["FIRST NAME","LAST NAME","PHONE","EMAIL","SOURCE EVENT","NOTE","STATUS","ACTIONS"].map((h) => (
+                  {["FIRST NAME","LAST NAME","PHONE","EMAIL","SOURCE EVENT","NOTE","STATUS","SITE VISIT","ACTIONS"].map((h) => (
                     <th key={h} className="text-left px-3 py-2.5 font-semibold uppercase tracking-wide text-[10px] whitespace-nowrap" style={{ color: "#94a3b8" }}>{h}</th>
                   ))}
                 </tr>
@@ -844,10 +909,23 @@ function LeadsSection() {
                           className="text-[11px] font-semibold border rounded px-2 py-0.5 focus:outline-none"
                           style={{ color: badge.color, borderColor: badge.border, background: "white" }}
                           value={lead.status}
-                          onChange={(e) => changeStatus(lead.id, e.target.value as PipelineStatus)}
+                          onChange={(e) => {
+                            const s = e.target.value as PipelineStatus;
+                            if (s === "site_scheduled") { openEditLead({ ...lead, status: s }); }
+                            else changeStatus(lead.id, s);
+                          }}
                         >
                           {PIPELINE_STAGES.map((s) => <option key={s.id} value={s.id}>{s.label.replace(" (New)", "")}</option>)}
                         </select>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {lead.status === "site_scheduled" ? (
+                          lead.siteVisitDate
+                            ? <span className="text-[11px] font-bold" style={{ color: "#1d4ed8" }}>{fmtDate(lead.siteVisitDate)}</span>
+                            : <button onClick={() => openEditLead(lead)} className="text-[10px] font-semibold px-1.5 py-0.5 rounded border" style={{ color: "#3b82f6", borderColor: "#bfdbfe", background: "#eff6ff" }}>Set date</button>
+                        ) : (
+                          <span style={{ color: "#cbd5e1" }}>—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1">
