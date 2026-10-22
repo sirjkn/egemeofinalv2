@@ -108,7 +108,7 @@ async function findMemberByEmail(email: string): Promise<{
 type Step =
   | { kind: "identifier" }
   | { kind: "set-password";   email: string; name: string; role: "shareholder" | "client" | "investor"; memberId: number }
-  | { kind: "enter-password"; email: string; name: string; role: "admin" | "shareholder" | "client" | "investor" }
+  | { kind: "enter-password"; email: string; name: string; role: "admin" | "shareholder" | "client" | "investor"; displayIdentifier?: string }
   | { kind: "reset-otp";      email: string; phone: string; name: string };
 
 // ─── Brand panel ──────────────────────────────────────────────────────────────
@@ -275,15 +275,16 @@ function IdentifierStep({ onNext, company }: {
           throw new Error("Phone number not registered. Contact your administrator.");
         }
 
-        // 2. Look up user_profiles — primary by member_id, fallback by email.
-        // The fallback handles: RLS blocking unauthenticated reads, member_id type
-        // mismatches, or cases where member_id wasn't persisted on earlier logins.
+        // 2. Look up user_profiles — primary by member_id+role (role-scoped to avoid
+        // cross-table ID collisions where a shareholder and client share the same
+        // numeric member_id), fallback by derived phone email.
         const derivedEmail = phoneToEmail(value);
 
         const { data: profileByMemberId } = await supabase
           .from("user_profiles")
           .select("member_id, full_name, role, is_active, email")
           .eq("member_id", member.id)
+          .eq("role", member.role)
           .maybeSingle();
 
         const { data: profileByEmail } = profileByMemberId
@@ -299,8 +300,10 @@ function IdentifierStep({ onNext, company }: {
         if (existingProfile) {
           if (existingProfile.is_active === false)
             throw new Error("This account has been deactivated. Contact your administrator.");
-          // Use the email on file so login works even after a phone number change
-          onNext({ kind: "enter-password", email: existingProfile.email, name: existingProfile.full_name || member.name, role: existingProfile.role as any });
+          // Use the email on file so login works even after a phone number change.
+          // displayIdentifier preserves the phone the user actually typed so the
+          // enter-password screen never shows a stale old phone number.
+          onNext({ kind: "enter-password", email: existingProfile.email, name: existingProfile.full_name || member.name, role: existingProfile.role as any, displayIdentifier: value.trim() });
           return;
         }
 
@@ -328,12 +331,13 @@ function IdentifierStep({ onNext, company }: {
         // Not in user_profiles by real email — check if a member record has this email
         const member = await findMemberByEmail(email);
         if (member) {
-          // Member found — look up their profile via member_id, with phone-email fallback
-          // (RLS may block member_id lookup when unauthenticated)
+          // Member found — look up their profile via member_id+role (role-scoped to avoid
+          // cross-table ID collisions), with phone-email fallback for RLS-blocked reads.
           const { data: profileByMemberId } = await supabase
             .from("user_profiles")
             .select("id, full_name, role, is_active, email")
             .eq("member_id", member.id)
+            .eq("role", member.role)
             .maybeSingle();
 
           // Fallback: if RLS blocked the member_id lookup, try the phone-derived email
@@ -669,7 +673,11 @@ function EnterPasswordStep({ step, onBack, onLoggedIn, onForgotPassword, company
           Welcome back{step.name ? `, ${firstName}` : ""}!
         </h1>
         <p className="text-sm text-gray-400 mb-1">
-          {step.role === "admin" ? step.email : step.email.replace(`@${SACCO_DOMAIN}`, "")}
+          {step.displayIdentifier
+            ? step.displayIdentifier
+            : step.role === "admin"
+              ? step.email
+              : step.email.replace(`@${SACCO_DOMAIN}`, "")}
         </p>
         <p className="text-xs font-semibold capitalize mb-7 px-2 py-1 rounded-full inline-block"
           style={{ background: "#eff6ff", color: "#4338ca" }}>
