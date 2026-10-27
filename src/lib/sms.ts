@@ -88,7 +88,7 @@ function defaults(): SmsSettings {
       oramobile: { username: "", password: "", apiKey: "", senderId: "EgemeoArdhi" },
     },
     smsTriggers: triggers,
-    contributionDueDay: 5,
+    contributionDueDay: 10,
     messageTemplates: {},
   };
 }

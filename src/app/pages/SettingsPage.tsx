@@ -5762,7 +5762,7 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
             <label className={labelCls}>Contribution Due Day (day of month)</label>
             <input type="number" min={1} max={28}
               value={cfg.contributionDueDay}
-              onChange={(e) => setCfg((p) => ({ ...p, contributionDueDay: parseInt(e.target.value) || 5 }))}
+              onChange={(e) => setCfg((p) => ({ ...p, contributionDueDay: parseInt(e.target.value) || 10 }))}
               className="w-24 border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100"
               style={{ borderColor: "var(--border)" }} />
             <p className="text-xs text-gray-400 mt-1">Reminders count back from this day each month.</p>
@@ -5775,7 +5775,9 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
             <AlertCircle size={14} className="text-blue-500" />
             <h2 className="text-sm font-bold" style={{ color: "#1a202c" }}>Scheduled Reminder Setup</h2>
           </div>
-          <p className="text-xs text-gray-500">Automatic daily reminders require two one-time steps in Supabase Dashboard:</p>
+          <p className="text-xs text-gray-500">
+            The Supabase scheduler sends contribution and plot reminders even when nobody is logged in. Complete these two one-time steps:
+          </p>
           <ol className="space-y-2 text-xs text-gray-600">
             <li className="flex gap-2">
               <span className="font-bold text-blue-600 flex-shrink-0">1.</span>

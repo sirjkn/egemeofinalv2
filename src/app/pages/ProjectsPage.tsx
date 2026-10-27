@@ -368,11 +368,12 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
   memberPhone?: string;
   isAdmin?: boolean;
   onClose: () => void;
-  onSave: (amount: number, method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => Promise<void>;
+  onSave: (amount: number, method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string; paymentDate?: string }) => Promise<void>;
 }) {
   const due = Math.max(0, Number(plot.price) - Number(plot.paid_amount));
   const [step, setStep] = useState<"amount" | "method">("amount");
   const [amount, setAmount] = useState("");
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
 
   const [enabledMethods, setEnabledMethods] = useState<PayMethod[]>(() => {
     if (!isAdmin) return ["mpesa"];
@@ -505,7 +506,7 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
               if (n <= 1) {
                 clearInterval(closeCountRef.current!);
                 const p = pendingComplete.current;
-                if (p) { onSave(parsedAmount, "mpesa", p.receipt, true, p.phone).then(() => onClose()).catch(() => onClose()); }
+                if (p) { onSave(parsedAmount, "mpesa", p.receipt, true, p.phone, isAdmin ? { paymentDate } : undefined).then(() => onClose()).catch(() => onClose()); }
                 return 0;
               }
               return n - 1;
@@ -545,7 +546,9 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
       await onSave(
         parsedAmount, method, ref || undefined, false,
         isManualMpesa ? (manualPhone || undefined) : undefined,
-        isManualMpesa ? { paidBy: manualPaidBy || undefined, comment: manualComment || undefined } : undefined,
+        isManualMpesa
+          ? { paidBy: manualPaidBy || undefined, comment: manualComment || undefined, paymentDate: isAdmin ? paymentDate : undefined }
+          : (isAdmin ? { paymentDate } : undefined),
       );
       onClose();
     } catch (e: any) {
@@ -581,6 +584,18 @@ export function PlotPaymentModal({ plot, projectName, assignedName, memberPhone,
                 style={{ borderColor: "var(--border)" }}
                 autoFocus
               />
+              {isAdmin && (
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Payment Date</label>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    style={{ borderColor: "var(--border)" }}
+                  />
+                </div>
+              )}
               <button onClick={handleProceed} disabled={!parsedAmount || parsedAmount <= 0}
                 className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-60"
                 style={{ background: "#2563eb" }}>
@@ -2718,13 +2733,14 @@ function ExternalInvestmentPage({
 
 function ProjectDetailView({
   project: initialProject, onBack, onDeleted,
-  shareholders, clients, onUpdated, isAdmin, currentMemberId, currentMemberType, highlightPlotId,
+  shareholders, clients, onUpdated, isAdmin, currentMemberId, currentMemberType, highlightPlotId, openDebtInitially = false,
 }: {
   project: Project; onBack: () => void; onDeleted: () => void;
   shareholders: Shareholder[]; clients: Client[];
   onUpdated: (p: Project) => void; isAdmin: boolean;
   currentMemberId?: number; currentMemberType?: string;
   highlightPlotId?: number;
+  openDebtInitially?: boolean;
 }) {
   const [project, setProject] = useState(initialProject);
   const [plots, setPlots] = useState<Plot[]>([]);
@@ -2751,7 +2767,7 @@ function ProjectDetailView({
   const [payTarget, setPayTarget] = useState<Plot | null>(null);
   const [editPlotTarget, setEditPlotTarget] = useState<Plot | null>(null);
   const [deletePlotTarget, setDeletePlotTarget] = useState<Plot | null>(null);
-  const [open, setOpen] = useState<Record<string, boolean>>({ plots: false, shareholders: false, allocation: false, distributions: false, documents: false });
+  const [open, setOpen] = useState<Record<string, boolean>>({ plots: false, shareholders: false, allocation: false, debt: openDebtInitially, distributions: false, documents: false });
   const [showEditProject, setShowEditProject] = useState(false);
   const [showDeleteProject, setShowDeleteProject] = useState(false);
   const [showEnroll, setShowEnroll] = useState(false);
@@ -2776,7 +2792,7 @@ function ProjectDetailView({
 
       // Load co-owners for all plots
       const coMap: Record<number, PlotCoOwner[]> = {};
-      await Promise.all(reconciled.map(async (plot) => {
+      await Promise.all(p.map(async (plot) => {
         try {
           const co = await plotCoOwnersApi.listByPlot(plot.id);
           if (co.length > 0) coMap[plot.id] = co;
@@ -2908,14 +2924,14 @@ function ProjectDetailView({
     await load();
   };
 
-  const handlePayment = async (plotId: number, amount: number, method: PayMethod = "cash", ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
+  const handlePayment = async (plotId: number, amount: number, method: PayMethod = "cash", ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string; paymentDate?: string }) => {
     const plot = plots.find((p) => p.id === plotId);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
 
     // For STK: try resolving payer name/phone from Safaricom callback
     let payerName = extras?.paidBy || (plot ? assignedName(plot) : "");
     let payerPhone = phone ?? "";
-    if (method === "mpesa" && ref && !extras) {
+    if (method === "mpesa" && ref && !extras?.paidBy) {
       try {
         const { data: cbRow } = await supabase.from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
         if (cbRow?.value) {
@@ -3027,6 +3043,23 @@ function ProjectDetailView({
     }
     return "—";
   };
+
+  const debtRows = allocated.map((plot) => {
+    const sold = Number(plot.price) || 0;
+    const paid = Math.min(Number(plot.paid_amount) || 0, sold);
+    return {
+      plot,
+      owner: assignedName(plot),
+      sold,
+      paid,
+      balance: Math.max(0, sold - paid),
+      paidPct: sold > 0 ? Math.min(100, Math.round((paid / sold) * 100)) : 0,
+    };
+  });
+  const debtSold = debtRows.reduce((sum, row) => sum + row.sold, 0);
+  const debtPaid = debtRows.reduce((sum, row) => sum + row.paid, 0);
+  const debtBalance = debtRows.reduce((sum, row) => sum + row.balance, 0);
+  const projectPaidPct = debtSold > 0 ? Math.min(100, Math.round((debtPaid / debtSold) * 100)) : 0;
 
   // Per-shareholder distributed amount map
   const distByMember: Record<number, number> = {};
@@ -3230,6 +3263,85 @@ function ProjectDetailView({
             </div>
           )}
         </div>
+
+        {/* Debt Management accordion — admin only */}
+        {isAdmin && (
+          <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: open.debt ? "#fecaca" : "var(--border)" }}>
+            <button onClick={() => toggle("debt")} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-50/50">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "#fef2f2" }}>
+                <CircleDollarSign size={14} color="#dc2626" />
+              </div>
+              <span className="font-bold text-sm flex-1 text-left" style={{ color: "#991b1b" }}>Debt Management</span>
+              <span className="text-xs font-bold text-red-600">{fmtKESFull(debtBalance)}</span>
+              <ChevronDown size={15} className={`text-red-400 transition-transform flex-shrink-0 ${open.debt ? "rotate-180" : ""}`} />
+            </button>
+            {open.debt && (
+              <div className="border-t" style={{ borderColor: "#fecaca" }}>
+                <div className="p-4" style={{ background: "#fffafa" }}>
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    {[
+                      { label: "Sold", value: debtSold, color: "#1e2d4a" },
+                      { label: "Paid", value: debtPaid, color: "#16a34a" },
+                      { label: "Balance", value: debtBalance, color: "#dc2626" },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-lg border bg-white px-3 py-2" style={{ borderColor: "#fee2e2" }}>
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-gray-400">{item.label}</p>
+                        <p className="text-xs font-extrabold mt-0.5" style={{ color: item.color }}>{fmtKESFull(item.value)}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="h-2.5 rounded-full overflow-hidden bg-red-100">
+                    <div className="h-full rounded-full bg-red-600 transition-all" style={{ width: `${projectPaidPct}%` }} />
+                  </div>
+                  <div className="flex justify-between mt-1 text-[10px]">
+                    <span className="font-semibold text-red-700">Sold vs Paid vs Balance</span>
+                    <span className="font-bold text-red-700">{projectPaidPct}% paid</span>
+                  </div>
+                </div>
+
+                {debtRows.length === 0 ? (
+                  <p className="px-4 py-4 text-xs text-gray-400">No allocated plots in this project.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr style={{ background: "#7f1d1d" }}>
+                          {["Client / Shareholder", "Plot No.", "Amount Paid", "Amount Due", "Progress"].map((heading) => (
+                            <th key={heading} className="px-3 py-2 text-left font-semibold text-white whitespace-nowrap">{heading}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {debtRows.map((row, index) => (
+                          <tr key={row.plot.id} className="border-t" style={{ borderColor: "#fee2e2", background: index % 2 === 0 ? "#fff" : "#fff7f7" }}>
+                            <td className="px-3 py-2 font-semibold whitespace-nowrap" style={{ color: "#1a202c" }}>{row.owner}</td>
+                            <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{row.plot.plot_number}</td>
+                            <td className="px-3 py-2 font-bold text-green-600 whitespace-nowrap">{fmtKESFull(row.paid)}</td>
+                            <td className="px-3 py-2 font-bold text-red-600 whitespace-nowrap">{fmtKESFull(row.balance)}</td>
+                            <td className="px-3 py-2 min-w-32">
+                              <div className="h-1.5 rounded-full overflow-hidden bg-red-100">
+                                <div className="h-full rounded-full bg-red-600" style={{ width: `${row.paidPct}%` }} />
+                              </div>
+                              <span className="text-[9px] font-bold text-red-600">{row.paidPct}%</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: "#450a0a" }}>
+                          <td colSpan={2} className="px-3 py-2 font-bold text-white">Project Total</td>
+                          <td className="px-3 py-2 font-bold text-white whitespace-nowrap">{fmtKESFull(debtPaid)}</td>
+                          <td className="px-3 py-2 font-bold text-white whitespace-nowrap">{fmtKESFull(debtBalance)}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Profit Distributions accordion — admin only */}
         {isAdmin && <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "var(--border)" }}>
@@ -3737,6 +3849,7 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
   const [shareholders, setShareholders] = useState<Shareholder[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [plotCounts, setPlotCounts] = useState<Record<number, { total: number; allocated: number }>>({});
+  const [openDebtProjectId, setOpenDebtProjectId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3848,7 +3961,8 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
               {!search && isAdmin && <button onClick={() => setShowCreate(true)} className="mt-2 text-xs font-semibold" style={{ color: COLOR }}>+ Create first project</button>}
             </div>
           ) : filtered.map((p) => (
-            <button key={p.id} onClick={() => setSelected(p)}
+            <div key={p.id} role="button" tabIndex={0} onClick={() => { setOpenDebtProjectId(null); setSelected(p); }}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { setOpenDebtProjectId(null); setSelected(p); } }}
               className="w-full text-left rounded-xl border p-3 hover:shadow-sm transition-all"
               style={{ borderColor: selected?.id === p.id ? COLOR : "#111827", background: selected?.id === p.id ? "#f0fdf4" : "#fff" }}>
               <div className="flex items-start justify-between gap-2">
@@ -3903,7 +4017,16 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
                   {p.date_completed && ` · Completed: ${new Date(p.date_completed).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}`}
                 </div>
               )}
-            </button>
+              {isAdmin && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setOpenDebtProjectId(p.id); setSelected(p); }}
+                  className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[10px] font-bold text-white"
+                  style={{ background: "#dc2626" }}
+                >
+                  <Eye size={11} /> View Debt Management
+                </button>
+              )}
+            </div>
           ))}
         </div>
       </div>
@@ -3912,7 +4035,7 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
       <div className={`flex-1 overflow-hidden ${selected ? "flex" : "hidden md:flex"} flex-col`} style={{ background: "var(--background)" }}>
         {selected ? (
           <ProjectDetailView
-            key={selected.id}
+            key={`${selected.id}-${openDebtProjectId === selected.id ? "debt" : "detail"}`}
             project={selected}
             onBack={() => setSelected(null)}
             onDeleted={() => { setSelected(null); load(); }}
@@ -3922,6 +4045,7 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
             currentMemberId={currentMemberId}
             currentMemberType={currentMemberType}
             highlightPlotId={deepLinkPlotId}
+            openDebtInitially={openDebtProjectId === selected.id}
             onUpdated={(updated) => {
               setSelected(updated);
               setProjects((prev) => prev.map((p) => p.id === updated.id ? updated : p));

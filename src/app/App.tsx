@@ -1433,6 +1433,8 @@ function PlotCsvUploadModal({ plot, memberName, onClose, onDone }: {
   );
 }
 
+type PaymentExtras = { paidBy?: string; comment?: string; paymentDate?: string };
+
 function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone }: { memberId: number; memberType: "shareholder" | "client"; memberName: string; memberPhone?: string }) {
   const navigate = useNavigate();
   const _profile = useProfile();
@@ -1456,16 +1458,16 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
 
   const closePay = () => { setPayTarget(null); setPayStep(null); setPlotAmount(""); };
 
-  const handlePay = async (method: PayMethod, ref?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
+  const handlePay = async (method: PayMethod, ref?: string, viaStk?: boolean, phone?: string, extras?: PaymentExtras) => {
     if (!payTarget) return;
     const amt = Math.min(parseFloat(plotAmount) || 0, Math.max(0, Number(payTarget.price) - Number(payTarget.paid_amount)));
     if (amt <= 0) return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
 
     // extras.paidBy overrides for manual; for STK try resolving from callback
     let payerName = extras?.paidBy || memberName;
     let payerPhone = phone ?? memberPhone ?? "";
-    if (method === "mpesa" && ref && !extras) {
+    if (method === "mpesa" && ref && !extras?.paidBy) {
       try {
         const { data: cbRow } = await supabase
           .from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
@@ -1496,7 +1498,7 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
       status: "",
       note: extras?.comment ?? "",
     });
-    await plotsApi.recordPayment(payTarget.id, amt, structuredNotes);
+    await plotsApi.recordPayment(payTarget.id, amt, structuredNotes, today);
     {
       let smsPhone = payerPhone;
       if (!smsPhone && memberId) {
@@ -2742,6 +2744,8 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const [profitsByProject, setProfitsByProject] = useState<Array<{ name: string; total: number; count: number; isActive: boolean }>>([]);
   const [projectCostProfit, setProjectCostProfit] = useState<Array<{ name: string; cost: number; profit: number; year: number }>>([]);
   const [showProfitsModal, setShowProfitsModal] = useState(false);
+  const [debtsByProject, setDebtsByProject] = useState<Array<{ id: number; name: string; total: number }>>([]);
+  const [showDebtsModal, setShowDebtsModal] = useState(false);
 
   const loadAdminStats = async () => {
     const now = new Date(); const { month, year } = getBillingPeriod(now);
@@ -2863,6 +2867,40 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
           year: p.date_started ? new Date(p.date_started).getFullYear() : new Date().getFullYear(),
         })));
       }
+
+      // Outstanding plot debt, reconciled from the actual payment history.
+      const { data: debtPlots } = await supabase
+        .from("plots")
+        .select("id, project_id, price, paid_amount, assigned_to_id, project:projects(project_name)")
+        .not("assigned_to_id", "is", null);
+      if (debtPlots?.length) {
+        const debtPlotIds = debtPlots.map((plot: any) => Number(plot.id));
+        const { data: debtPayments } = await supabase
+          .from("plot_payments")
+          .select("plot_id, amount")
+          .in("plot_id", debtPlotIds);
+        const paidByPlot: Record<number, number> = {};
+        for (const payment of debtPayments ?? []) {
+          const plotId = Number(payment.plot_id);
+          paidByPlot[plotId] = (paidByPlot[plotId] ?? 0) + Number(payment.amount);
+        }
+        const grouped: Record<number, { id: number; name: string; total: number }> = {};
+        for (const plot of debtPlots as any[]) {
+          const projectId = Number(plot.project_id);
+          if (!grouped[projectId]) {
+            grouped[projectId] = {
+              id: projectId,
+              name: plot.project?.project_name ?? `Project #${projectId}`,
+              total: 0,
+            };
+          }
+          const paid = paidByPlot[Number(plot.id)] ?? 0;
+          grouped[projectId].total += Math.max(0, Number(plot.price ?? 0) - paid);
+        }
+        setDebtsByProject(Object.values(grouped).filter((row) => row.total > 0).sort((a, b) => b.total - a.total));
+      } else {
+        setDebtsByProject([]);
+      }
     })();
 
     // Realtime: re-calculate totalCollected when contributions or shareholders change
@@ -2937,7 +2975,20 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""}</div>
             </div>
           </button>
-          {/* Row 3: Cumulative (blue, full width) */}
+          {/* Row 3: Debt Management (red, full width) */}
+          <button onClick={() => setShowDebtsModal(true)}
+            className="rounded-xl p-4 flex items-center gap-3 col-span-2 text-left hover:brightness-110 transition-all"
+            style={{ background: "#b91c1c" }}>
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.18)" }}>
+              <CircleDollarSign size={18} color="white" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">{fmtKESFull(debtsByProject.reduce((sum, row) => sum + row.total, 0))}</div>
+              <div className="text-xs font-semibold text-white">Debt Management</div>
+              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>Outstanding plot balances · click to view</div>
+            </div>
+          </button>
+          {/* Row 4: Cumulative (blue, full width) */}
           <div className="rounded-xl p-4 flex items-center gap-3 col-span-2" style={{ background: "#1d4ed8" }}>
             <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><BarChart2 size={18} color="white" /></div>
             <div className="min-w-0">
@@ -3140,6 +3191,43 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         </div>
       </div>
     )}
+
+    {/* ── Debt Management Modal ── */}
+    {showDebtsModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }}
+        onClick={(e) => { if (e.target === e.currentTarget) setShowDebtsModal(false); }}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b" style={{ background: "#fef2f2", borderColor: "#fecaca" }}>
+            <div>
+              <p className="font-bold text-base text-red-900">Debt Management</p>
+              <p className="text-xs text-red-600">Outstanding balance by project</p>
+            </div>
+            <button onClick={() => setShowDebtsModal(false)} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-red-100">
+              <X size={16} className="text-red-700" />
+            </button>
+          </div>
+          <div className="px-5 py-4 max-h-[60vh] overflow-y-auto">
+            {debtsByProject.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-8">No outstanding project debt.</p>
+            ) : (
+              <>
+                {debtsByProject.map((row, index) => (
+                  <div key={row.id} className={`flex items-center justify-between py-3 ${index < debtsByProject.length - 1 ? "border-b" : ""}`}
+                    style={{ borderColor: "#fee2e2" }}>
+                    <p className="text-sm font-semibold" style={{ color: "#1a202c" }}>{row.name}</p>
+                    <p className="text-sm font-extrabold text-red-600">{fmtKESFull(row.total)}</p>
+                  </div>
+                ))}
+                <div className="mt-3 pt-3 border-t flex items-center justify-between" style={{ borderColor: "#fecaca" }}>
+                  <p className="text-sm font-bold text-red-950">Total Debt</p>
+                  <p className="text-base font-extrabold text-red-700">{fmtKESFull(debtsByProject.reduce((sum, row) => sum + row.total, 0))}</p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }
@@ -3238,14 +3326,14 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const plotDue = plotPayTarget ? Math.max(0, Number(plotPayTarget.price) - Number(plotPayTarget.paid_amount)) : 0;
   const parsedPlotAmt = Math.min(parseFloat(plotPayAmount) || 0, plotDue);
 
-  const handlePlotPayComplete = async (method: PayMethod, ref?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
+  const handlePlotPayComplete = async (method: PayMethod, ref?: string, _viaStk?: boolean, phone?: string, extras?: PaymentExtras) => {
     if (!plotPayTarget) return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
 
     // For STK: resolve payer name/phone from Safaricom callback
     let payerName = extras?.paidBy || memberInfo?.name || "";
     let payerPhone = phone ?? memberShareholder?.phone ?? "";
-    if (method === "mpesa" && ref && !extras) {
+    if (method === "mpesa" && ref && !extras?.paidBy) {
       try {
         const { data: cbRow } = await supabase
           .from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
@@ -4425,12 +4513,12 @@ function MyPlotsPage() {
         memberPhone={memberPhone || undefined}
         onClose={() => setPayPlot(null)}
         onSave={async (amount, method, reference, _viaStk, phone, extras) => {
-          const today = new Date().toISOString().split("T")[0];
+          const today = extras?.paymentDate || new Date().toISOString().split("T")[0];
 
           // extras.paidBy overrides for manual; for STK try resolving from callback
           let payerName = extras?.paidBy || profile.full_name;
           let payerPhone = phone ?? "";
-          if (method === "mpesa" && reference && !extras) {
+          if (method === "mpesa" && reference && !extras?.paidBy) {
             try {
               const { data: cbRow } = await supabase
                 .from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
@@ -5638,7 +5726,7 @@ interface PaymentModalProps {
   memberName?: string;
   memberPhone?: string;
   accountRef?: string;
-  onComplete: (method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => Promise<void>;
+  onComplete: (method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: PaymentExtras) => Promise<void>;
   onClose: () => void;
 }
 
@@ -5669,6 +5757,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
   const [bankName, setBankName] = useState("");
   const [processing, setProcessing] = useState(false);
   const [err, setErr] = useState("");
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
 
   // M-Pesa sub-mode
   const [mpesaMode, setMpesaMode] = useState<"stk" | "manual">("stk");
@@ -5782,7 +5871,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
               if (n <= 1) {
                 clearInterval(closeCountRef.current!);
                 const p = pendingComplete.current;
-                if (p) onComplete("mpesa", p.receipt, true, p.phone);
+                if (p) onComplete("mpesa", p.receipt, true, p.phone, isAdmin ? { paymentDate } : undefined);
                 return 0;
               }
               return n - 1;
@@ -5816,7 +5905,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
       if (method === "cheque") ref = chequeNo || undefined;
       else if (method === "bank") ref = `${bankName} ${reference}`.trim() || undefined;
       else ref = reference || undefined;
-      await onComplete(method, ref);
+      await onComplete(method, ref, false, undefined, isAdmin ? { paymentDate } : undefined);
     } catch (e: any) { setErr(e.message); setProcessing(false); }
   };
 
@@ -5827,6 +5916,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
       await onComplete("mpesa", manualRef.trim().toUpperCase(), false, manualPhone || undefined, {
         paidBy: manualPaidBy || undefined,
         comment: manualComment || undefined,
+        paymentDate: isAdmin ? paymentDate : undefined,
       });
     } catch (e: any) { setErr(e.message); setProcessing(false); }
   };
@@ -5850,6 +5940,19 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount</span>
             <span className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(amount)}</span>
           </div>
+
+          {isAdmin && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500 mb-1 block">Payment Date</label>
+              <input
+                type="date"
+                value={paymentDate}
+                onChange={(e) => setPaymentDate(e.target.value)}
+                className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200"
+                style={{ borderColor: "var(--border)" }}
+              />
+            </div>
+          )}
 
           {/* Method tabs */}
           <div className={`grid gap-2`} style={{ gridTemplateColumns: `repeat(${availableMethods.length}, 1fr)` }}>
@@ -6142,11 +6245,11 @@ function RecordContributionModal({
     setShowPayment(true);
   };
 
-  const handleSave = async (method: PayMethod, reference?: string, _viaStk?: boolean, phone?: string, extras?: { paidBy?: string; comment?: string }) => {
+  const handleSave = async (method: PayMethod, reference?: string, _viaStk?: boolean, phone?: string, extras?: PaymentExtras) => {
     setSaving(true); setErr("");
     try {
       const monthName = MONTHS[(form.month - 1)];
-      const today = new Date().toISOString().slice(0, 10);
+      const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
       const c = await contributionsApi.record({
         shareholder_id: form.shareholder_id,
         amount: amt,
@@ -7567,13 +7670,11 @@ export default function App() {
 
   // ── Automated plot deadline reminders (5d / 1d / due today, deadline day each month) ───
   useEffect(() => {
-    if (!authReady) return;
+    // Only an authenticated admin may run the browser-side scheduler. A database
+    // claim below guarantees one SMS per plot per EAT day across all admin sessions.
+    if (!authReady || profile?.role !== "admin") return;
     const todayEAT = new Date(Date.now() + 3 * 60 * 60 * 1000); // EAT = UTC+3
     const todayStr = todayEAT.toISOString().split("T")[0];
-    const storageKey = `sacco_plot_rem_last_${todayStr}`;
-    if (localStorage.getItem(storageKey)) return;
-    // Mark as processed immediately to prevent double-fire from remounts
-    localStorage.setItem(storageKey, "1");
 
     const run = async () => {
       try {
@@ -7590,9 +7691,9 @@ export default function App() {
         const cfg = await _loadSms();
         if (!cfg.smsEnabled) return;
 
-        const resolvePhone = async (memberId: number, directPhone: string | null | undefined): Promise<string | null> => {
+        const resolvePhone = async (memberId: number, memberRole: "shareholder" | "client", directPhone: string | null | undefined): Promise<string | null> => {
           if (directPhone?.trim()) return directPhone.trim();
-          const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", memberId).maybeSingle();
+          const { data: up } = await supabase.from("user_profiles").select("email").eq("member_id", memberId).eq("role", memberRole).maybeSingle();
           if (!up?.email) return null;
           return up.email.replace(/@.*$/, "") || null;
         };
@@ -7620,15 +7721,12 @@ export default function App() {
           const daysLeft = Math.round((dueMs - todayMs) / msPerDay);
           if (!THRESHOLDS.includes(daysLeft)) continue;
 
-          // Per-plot per-day per-threshold dedup
-          const sentKey = `sacco_plot_rem_${plot.id}_${daysLeft}d_${todayStr}`;
-          if (localStorage.getItem(sentKey)) continue;
-
           const role = plot.assigned_to_type === "shareholder" ? "shareholders" : "clients";
           const { data: member } = await supabase.from(role).select("id, name, phone").eq("id", plot.assigned_to_id).maybeSingle();
           if (!member) continue;
 
-          const phone = await resolvePhone(member.id, member.phone);
+          const memberRole = plot.assigned_to_type === "shareholder" ? "shareholder" : "client";
+          const phone = await resolvePhone(member.id, memberRole, member.phone);
           if (!phone) continue;
 
           const triggerMap: Record<number, string> = { 5: "sms_plot_reminder_5d", 1: "sms_plot_reminder_1d", 0: "sms_plot_reminder_0d" };
@@ -7642,17 +7740,48 @@ export default function App() {
           const firstName = member.name.split(" ")[0];
           const message = _tpls.plotReminder(firstName, plot.plot_number ?? String(plot.id), deadlineDayLabel, daysLeft);
 
+          // Unique by EAT date + reminder type + plot + assigned client/member.
+          // Repeated scheduler runs therefore cannot resend the same reminder.
+          const claimKey = `plot_reminder:${todayStr}:${triggerId}:${plot.id}:${memberRole}:${member.id}`;
+          const { error: claimError } = await supabase.from("app_settings").insert({
+            key: claimKey,
+            value: {
+              plot_id: plot.id,
+              member_id: member.id,
+              member_role: memberRole,
+              reminder_date: todayStr,
+              trigger: triggerId,
+              status: "sending",
+            },
+            updated_at: new Date().toISOString(),
+          });
+          if (claimError) continue;
+
           try {
             await _sendSms(phone, message, triggerId, cfg);
-            localStorage.setItem(sentKey, "1");
-          } catch { /* silent */ }
+            await supabase.from("app_settings").update({
+              value: {
+                plot_id: plot.id,
+                member_id: member.id,
+                member_role: memberRole,
+                reminder_date: todayStr,
+                trigger: triggerId,
+                status: "sent",
+                sent_at: new Date().toISOString(),
+              },
+              updated_at: new Date().toISOString(),
+            }).eq("key", claimKey);
+          } catch {
+            // Release the claim so a later admin session can retry a failed send.
+            await supabase.from("app_settings").delete().eq("key", claimKey);
+          }
         }
       } catch { /* silent */ }
     };
 
     const t = setTimeout(run, 5000);
     return () => clearTimeout(t);
-  }, [authReady]);
+  }, [authReady, profile?.role]);
 
   // ── Automated contribution reminders (5d / 1d / due today before 10th of each month) ──
   useEffect(() => {
