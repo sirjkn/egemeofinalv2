@@ -3837,7 +3837,7 @@ function ProjectDetailView({
 
 function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { isAdmin?: boolean; currentMemberId?: number; currentMemberType?: string }) {
   const location = useLocation();
-  const deepLink = (location.state as { projectId?: number; plotId?: number } | null) ?? {};
+  const deepLink = (location.state as { projectId?: number; plotId?: number; openDebt?: boolean } | null) ?? {};
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3890,8 +3890,11 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
   useEffect(() => {
     if (!deepLink.projectId || projects.length === 0 || selected) return;
     const target = projects.find((p) => p.id === deepLink.projectId);
-    if (target) setSelected(target);
-  }, [projects, deepLink.projectId]);
+    if (target) {
+      if (deepLink.openDebt) setOpenDebtProjectId(target.id);
+      setSelected(target);
+    }
+  }, [projects, deepLink.projectId, deepLink.openDebt]);
 
   if (!dbReady) return (
     <div className="flex flex-col items-center justify-center h-full text-center px-8 py-12">

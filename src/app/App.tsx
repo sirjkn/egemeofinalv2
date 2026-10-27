@@ -2735,6 +2735,7 @@ const adminDashMods = [
 ];
 
 function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<{ shareholders: number; clients: number; investors: number; totalCollected: number; thisMonth: number; overdueCount: number; plots: number; assignedPlots: number } | null>(null);
   const [monthlyCollections, setMonthlyCollections] = useState<Array<{ month: string; amount: number }>>([]);
   const [memberDist, setMemberDist] = useState<Array<{ name: string; value: number; color: string }>>([]);
@@ -2872,6 +2873,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       const { data: debtPlots } = await supabase
         .from("plots")
         .select("id, project_id, price, paid_amount, assigned_to_id, project:projects(project_name)")
+        .eq("status", "assigned")
         .not("assigned_to_id", "is", null);
       if (debtPlots?.length) {
         const debtPlotIds = debtPlots.map((plot: any) => Number(plot.id));
@@ -2894,10 +2896,16 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               total: 0,
             };
           }
-          const paid = paidByPlot[Number(plot.id)] ?? 0;
+          // Match Projects Debt Management exactly: use payment-history sums
+          // when present, otherwise preserve the stored pre-migration total.
+          const paid = paidByPlot[Number(plot.id)] ?? Number(plot.paid_amount ?? 0);
           grouped[projectId].total += Math.max(0, Number(plot.price ?? 0) - paid);
         }
-        setDebtsByProject(Object.values(grouped).filter((row) => row.total > 0).sort((a, b) => b.total - a.total));
+        setDebtsByProject(
+          Object.values(grouped).sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }),
+          ),
+        );
       } else {
         setDebtsByProject([]);
       }
@@ -2975,9 +2983,9 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""}</div>
             </div>
           </button>
-          {/* Row 3: Debt Management (red, full width) */}
+          {/* Row 3: Debt Management + Cumulative Totals */}
           <button onClick={() => setShowDebtsModal(true)}
-            className="rounded-xl p-4 flex items-center gap-3 col-span-2 text-left hover:brightness-110 transition-all"
+            className="rounded-xl p-4 flex items-center gap-3 text-left hover:brightness-110 transition-all"
             style={{ background: "#b91c1c" }}>
             <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.18)" }}>
               <CircleDollarSign size={18} color="white" />
@@ -2988,8 +2996,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>Outstanding plot balances · click to view</div>
             </div>
           </button>
-          {/* Row 4: Cumulative (blue, full width) */}
-          <div className="rounded-xl p-4 flex items-center gap-3 col-span-2" style={{ background: "#1d4ed8" }}>
+          <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: "#1d4ed8" }}>
             <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><BarChart2 size={18} color="white" /></div>
             <div className="min-w-0">
               <div className="text-sm font-bold text-white truncate">{stats && totalProfits !== null ? fmtKESFull(stats.totalCollected + totalProfits) : "KES —"}</div>
@@ -3212,10 +3219,28 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             ) : (
               <>
                 {debtsByProject.map((row, index) => (
-                  <div key={row.id} className={`flex items-center justify-between py-3 ${index < debtsByProject.length - 1 ? "border-b" : ""}`}
+                  <div key={row.id} className={`flex items-center gap-3 py-3 ${index < debtsByProject.length - 1 ? "border-b" : ""}`}
                     style={{ borderColor: "#fee2e2" }}>
-                    <p className="text-sm font-semibold" style={{ color: "#1a202c" }}>{row.name}</p>
-                    <p className="text-sm font-extrabold text-red-600">{fmtKESFull(row.total)}</p>
+                    <p className="text-sm font-semibold flex-1 min-w-0 truncate" style={{ color: "#1a202c" }}>{row.name}</p>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {row.total <= 0 ? (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold tracking-wide text-white bg-green-600 whitespace-nowrap">
+                          FULLY PAID
+                        </span>
+                      ) : (
+                        <p className="text-sm font-extrabold text-red-600 whitespace-nowrap">{fmtKESFull(row.total)}</p>
+                      )}
+                      <button
+                        onClick={() => {
+                          setShowDebtsModal(false);
+                          navigate("/projects", { state: { projectId: row.id, openDebt: true } });
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold text-black bg-white hover:bg-red-50 transition-colors"
+                        style={{ borderColor: "#dc2626" }}
+                      >
+                        <Eye size={11} /> View
+                      </button>
+                    </div>
                   </div>
                 ))}
                 <div className="mt-3 pt-3 border-t flex items-center justify-between" style={{ borderColor: "#fecaca" }}>

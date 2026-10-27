@@ -1004,15 +1004,18 @@ export const plotsApi = {
     if (plots.length > 0) {
       const ids = plots.map((p) => p.id);
       const { data: pmts } = await supabase.from("plot_payments").select("plot_id, amount").in("plot_id", ids);
-      if (pmts) {
-        const sums: Record<number, number> = Object.fromEntries(ids.map((id) => [id, 0]));
+      if (pmts && pmts.length > 0) {
+        const sums: Record<number, number> = {};
         for (const r of pmts) {
           const pid = Number(r.plot_id);
           sums[pid] = (sums[pid] ?? 0) + Number(r.amount);
         }
         return plots.map((pl) => {
-          const correct = sums[pl.id] ?? 0;
-          if (correct !== Number(pl.paid_amount ?? 0)) {
+          const correct = sums[pl.id];
+          // Pre-migration plots may have a valid paid_amount but no individual
+          // plot_payments rows. Preserve that stored figure when no history
+          // exists for this specific plot.
+          if (correct !== undefined && correct !== Number(pl.paid_amount ?? 0)) {
             supabase.from("plots").update({ paid_amount: correct }).eq("id", pl.id).then(() => {});
             return { ...pl, paid_amount: correct };
           }
@@ -1042,15 +1045,15 @@ export const plotsApi = {
     if (merged.length > 0) {
       const ids = merged.map((p) => p.id);
       const { data: pmts } = await supabase.from("plot_payments").select("plot_id, amount").in("plot_id", ids);
-      if (pmts) {
-        const sums: Record<number, number> = Object.fromEntries(ids.map((id) => [id, 0]));
+      if (pmts && pmts.length > 0) {
+        const sums: Record<number, number> = {};
         for (const r of pmts) {
           const pid = Number(r.plot_id);
           sums[pid] = (sums[pid] ?? 0) + Number(r.amount);
         }
         return merged.map((pl) => {
-          const correct = sums[pl.id] ?? 0;
-          if (correct !== Number(pl.paid_amount ?? 0)) {
+          const correct = sums[pl.id];
+          if (correct !== undefined && correct !== Number(pl.paid_amount ?? 0)) {
             supabase.from("plots").update({ paid_amount: correct }).eq("id", pl.id).then(() => {});
             return { ...pl, paid_amount: correct };
           }

@@ -89,20 +89,21 @@ async function runPlotReminders(supabase: any, settings: any, atCfg: any, eatNow
   const { data: plots, error: plotsError } = await supabase
     .from("plots")
     .select("id, plot_number, price, paid_amount, assigned_to_id, assigned_to_type, deadline")
+    .eq("status", "assigned")
     .not("assigned_to_id", "is", null)
     .not("deadline", "is", null)
     .gt("price", 0);
   if (plotsError) throw plotsError;
   if (!plots?.length) return { sent: 0, failed: 0, skipped: 0, noPhone: 0 };
 
-  // Always calculate balances from the payment history instead of trusting a
-  // potentially stale plots.paid_amount value.
+  // Reconcile from payment history where rows exist while retaining stored
+  // totals for legacy plots whose historical payments predate plot_payments.
   const plotIds = plots.map((plot: any) => Number(plot.id));
   const { data: payments } = await supabase
     .from("plot_payments")
     .select("plot_id, amount")
     .in("plot_id", plotIds);
-  const paidByPlot: Record<number, number> = Object.fromEntries(plotIds.map((id: number) => [id, 0]));
+  const paidByPlot: Record<number, number> = {};
   for (const payment of payments ?? []) {
     const plotId = Number(payment.plot_id);
     paidByPlot[plotId] = (paidByPlot[plotId] ?? 0) + Number(payment.amount);
@@ -114,7 +115,10 @@ async function runPlotReminders(supabase: any, settings: any, atCfg: any, eatNow
   let noPhone = 0;
 
   for (const plot of plots) {
-    const balance = Number(plot.price) - (paidByPlot[Number(plot.id)] ?? 0);
+    // Use the same rule as Project Debt Management and the dashboard:
+    // payment-history sum when present, otherwise the stored legacy total.
+    const paid = paidByPlot[Number(plot.id)] ?? Number(plot.paid_amount ?? 0);
+    const balance = Number(plot.price) - paid;
     if (balance <= 0 || !plot.deadline) {
       skipped++;
       continue;
