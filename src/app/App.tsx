@@ -2747,6 +2747,14 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const [showProfitsModal, setShowProfitsModal] = useState(false);
   const [debtsByProject, setDebtsByProject] = useState<Array<{ id: number; name: string; total: number }>>([]);
   const [showDebtsModal, setShowDebtsModal] = useState(false);
+  const [shareholderReportProjects, setShareholderReportProjects] = useState<Array<{ id: number; name: string }>>([]);
+  const [shareholderReport, setShareholderReport] = useState<Array<{
+    id: number;
+    memberNumber: number;
+    name: string;
+    contribution: number;
+    profits: Record<number, number>;
+  }>>([]);
 
   const loadAdminStats = async () => {
     const now = new Date(); const { month, year } = getBillingPeriod(now);
@@ -2754,7 +2762,9 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       supabase.from("shareholders").select("id", { count: "exact", head: true }),
       supabase.from("clients").select("id", { count: "exact", head: true }).eq("status", "Active"),
       supabase.from("investors").select("id", { count: "exact", head: true }),
-      supabase.from("shareholders").select("id, net_savings").neq("status", "Inactive"),
+      // Include every shareholder so this total is identical to the report's
+      // Contribution total.
+      supabase.from("shareholders").select("id, net_savings"),
       supabase.from("contributions").select("amount, status").eq("month", month).eq("year", year),
       supabase.from("plots").select("id, status"),
       supabase.from("payments").select("id, amount, purpose, created_at, status, member_type").order("created_at", { ascending: false }).limit(30),
@@ -2909,6 +2919,67 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       } else {
         setDebtsByProject([]);
       }
+
+      // Shareholder contribution + per-project profit report.
+      const [reportShareholders, reportProjects, reportDistributions, reportContributions] = await Promise.all([
+        supabase.from("shareholders").select("id, member_number, name, net_savings").order("member_number", { ascending: true }),
+        supabase.from("projects").select("id, project_name, date_completed"),
+        supabase.from("profit_distributions").select("shareholder_id, project_id, amount").not("shareholder_id", "is", null),
+        supabase.from("contributions").select("shareholder_id, amount"),
+      ]);
+      const orderedProjects = (reportProjects.data ?? [])
+        .map((row: any) => ({ id: Number(row.id), name: row.project_name ?? `Project ${row.id}` }))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+      const contributionByShareholder: Record<number, number> = {};
+      for (const contribution of reportContributions.data ?? []) {
+        const shareholderId = Number(contribution.shareholder_id);
+        contributionByShareholder[shareholderId] = (contributionByShareholder[shareholderId] ?? 0) + Number(contribution.amount);
+      }
+      const profitByShareholder: Record<number, Record<number, number>> = {};
+      for (const distribution of reportDistributions.data ?? []) {
+        const shareholderId = Number(distribution.shareholder_id);
+        const projectId = Number(distribution.project_id);
+        if (!profitByShareholder[shareholderId]) profitByShareholder[shareholderId] = {};
+        profitByShareholder[shareholderId][projectId] =
+          (profitByShareholder[shareholderId][projectId] ?? 0) + Number(distribution.amount);
+      }
+      setShareholderReportProjects(orderedProjects);
+      const reportRows = (reportShareholders.data ?? []).map((row: any) => ({
+        id: Number(row.id),
+        memberNumber: Number(row.member_number ?? 0),
+        name: row.name ?? "Unnamed Shareholder",
+        contribution: row.net_savings != null
+          ? Math.max(0, Number(row.net_savings))
+          : (contributionByShareholder[Number(row.id)] ?? 0),
+        profits: profitByShareholder[Number(row.id)] ?? {},
+      })).sort((a, b) => a.memberNumber - b.memberNumber || a.name.localeCompare(b.name));
+      setShareholderReport(reportRows);
+
+      // The dashboard Total Profits card and modal use the same shareholder-only
+      // profit rows as the report's Total Profit column.
+      const reportProjectMeta = Object.fromEntries(
+        (reportProjects.data ?? []).map((project: any) => [
+          Number(project.id),
+          {
+            name: project.project_name ?? `Project ${project.id}`,
+            isActive: !project.date_completed,
+          },
+        ]),
+      );
+      const reportProfitGroups: Record<number, { name: string; total: number; count: number; isActive: boolean }> = {};
+      for (const distribution of reportDistributions.data ?? []) {
+        const projectId = Number(distribution.project_id);
+        const meta = reportProjectMeta[projectId] ?? { name: `Project ${projectId}`, isActive: true };
+        if (!reportProfitGroups[projectId]) {
+          reportProfitGroups[projectId] = { name: meta.name, total: 0, count: 0, isActive: meta.isActive };
+        }
+        reportProfitGroups[projectId].total += Number(distribution.amount);
+        reportProfitGroups[projectId].count += 1;
+      }
+      const reportProfitRows = Object.values(reportProfitGroups)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+      setProfitsByProject(reportProfitRows);
+      setTotalProfits(reportProfitRows.reduce((sum, row) => sum + row.total, 0));
     })();
 
     // Realtime: re-calculate totalCollected when contributions or shareholders change
@@ -2922,10 +2993,124 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
   const ChartSkeleton = () => <div className="h-36 w-full animate-pulse rounded-xl" style={{ background: "#f1f5f9" }} />;
   const statusColor = (s: string) => s === "completed" ? "#10b981" : s === "pending" ? "#f59e0b" : "#94a3b8";
+  const reportContributionTotal = shareholderReport.reduce((sum, row) => sum + row.contribution, 0);
+  const reportProfitTotal = shareholderReport.reduce(
+    (sum, row) => sum + shareholderReportProjects.reduce(
+      (projectSum, project) => projectSum + (row.profits[project.id] ?? 0),
+      0,
+    ),
+    0,
+  );
+  const reportGrandTotal = reportContributionTotal + reportProfitTotal;
+
+  const exportShareholderReportPdf = async () => {
+    if (shareholderReport.length === 0) return;
+    const company = await getCompanyDetails();
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const money = (value: number) => Number(value || 0).toLocaleString("en-KE", { maximumFractionDigits: 2 });
+    const projectTotals = Object.fromEntries(
+      shareholderReportProjects.map((project) => [
+        project.id,
+        shareholderReport.reduce((sum, row) => sum + (row.profits[project.id] ?? 0), 0),
+      ]),
+    );
+    const contributionTotal = shareholderReport.reduce((sum, row) => sum + row.contribution, 0);
+    const profitTotal = shareholderReport.reduce(
+      (sum, row) => sum + shareholderReportProjects.reduce(
+        (projectSum, project) => projectSum + (row.profits[project.id] ?? 0),
+        0,
+      ),
+      0,
+    );
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(30, 45, 74);
+    doc.text(company.name || "Egemeo Ardhi", 12, 13);
+    doc.setFontSize(11);
+    doc.text("Shareholders Contribution & Project Profit Report", pageWidth / 2, 21, { align: "center" });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `Generated ${new Date().toLocaleString("en-KE", { timeZone: "Africa/Nairobi", dateStyle: "medium", timeStyle: "short" })}`,
+      pageWidth / 2,
+      26,
+      { align: "center" },
+    );
+
+    const head: any[] = [
+      [
+        { content: "", colSpan: 3, styles: { fillColor: [71, 120, 197] } },
+        {
+          content: "PROJECT PROFITS",
+          colSpan: Math.max(1, shareholderReportProjects.length),
+          styles: { halign: "center", fillColor: [71, 120, 197], textColor: 255, fontStyle: "bold" },
+        },
+        { content: "", colSpan: 2, styles: { fillColor: [71, 120, 197] } },
+      ],
+      [
+        "No",
+        "Name",
+        "Contribution",
+        ...shareholderReportProjects.map((project) => project.name),
+        "Total Profit",
+        "Grand Total",
+      ],
+    ];
+    const body = shareholderReport.map((shareholder, index) => {
+      const totalProfit = shareholderReportProjects.reduce(
+        (sum, project) => sum + (shareholder.profits[project.id] ?? 0),
+        0,
+      );
+      return [
+        shareholder.memberNumber || index + 1,
+        shareholder.name,
+        money(shareholder.contribution),
+        ...shareholderReportProjects.map((project) => money(shareholder.profits[project.id] ?? 0)),
+        money(totalProfit),
+        money(shareholder.contribution + totalProfit),
+      ];
+    });
+    const foot = [[
+      "",
+      "TOTALS",
+      money(contributionTotal),
+      ...shareholderReportProjects.map((project) => money(projectTotals[project.id] ?? 0)),
+      money(profitTotal),
+      money(contributionTotal + profitTotal),
+    ]];
+
+    autoTable(doc, {
+      startY: 31,
+      head,
+      body,
+      foot,
+      theme: "grid",
+      styles: { fontSize: shareholderReportProjects.length > 6 ? 5.5 : 6.5, cellPadding: 1.6, overflow: "linebreak" },
+      headStyles: { fillColor: [71, 120, 197], textColor: 255, fontStyle: "bold", halign: "left" },
+      footStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [225, 231, 239] },
+      columnStyles: {
+        0: { cellWidth: 11, halign: "center" },
+        1: { cellWidth: 38 },
+        2: { halign: "right" },
+      },
+      didParseCell: (data) => {
+        if (data.column.index >= 2) data.cell.styles.halign = "right";
+      },
+      margin: { left: 8, right: 8 },
+      horizontalPageBreak: true,
+      horizontalPageBreakRepeat: [0, 1, 2],
+    });
+    doc.save(`shareholders-profit-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
 
   return (
     <>
-    <div className="p-4 md:p-6 flex flex-col lg:flex-row gap-6 min-h-0">
+    <div className="p-4 md:p-6 flex flex-col gap-6 min-h-0">
+      <div className="flex flex-col lg:flex-row gap-6 min-h-0">
 
       {/* ── Left column ── */}
       <div className="flex flex-col gap-5 w-full lg:w-[380px] xl:w-[420px] flex-shrink-0">
@@ -2966,9 +3151,9 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
           <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: "#16a34a" }}>
             <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><Link2 size={18} color="white" /></div>
             <div className="min-w-0">
-              <div className="text-sm font-bold text-white truncate">{stats ? fmtKESFull(stats.totalCollected) : "KES —"}</div>
+              <div className="text-sm font-bold text-white truncate">{shareholderReport.length ? fmtKESFull(reportContributionTotal) : "KES —"}</div>
               <div className="text-xs font-semibold text-white">Total Collected</div>
-              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>Excl. inactive</div>
+              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>All shareholders</div>
             </div>
           </div>
           <button onClick={() => setShowProfitsModal(true)}
@@ -2978,7 +3163,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               <TrendingUp size={18} color="white" />
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-bold text-white truncate">{totalProfits === null ? "KES —" : fmtKESFull(totalProfits)}</div>
+              <div className="text-sm font-bold text-white truncate">{shareholderReport.length ? fmtKESFull(reportProfitTotal) : "KES —"}</div>
               <div className="text-xs font-semibold text-white">Total Profits</div>
               <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>{profitsByProject.length} project{profitsByProject.length !== 1 ? "s" : ""}</div>
             </div>
@@ -2999,7 +3184,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
           <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: "#1d4ed8" }}>
             <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}><BarChart2 size={18} color="white" /></div>
             <div className="min-w-0">
-              <div className="text-sm font-bold text-white truncate">{stats && totalProfits !== null ? fmtKESFull(stats.totalCollected + totalProfits) : "KES —"}</div>
+              <div className="text-sm font-bold text-white truncate">{shareholderReport.length ? fmtKESFull(reportGrandTotal) : "KES —"}</div>
               <div className="text-xs font-semibold text-white">Cumulative Totals</div>
               <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.75)" }}>Total Collected + Total Profits</div>
             </div>
@@ -3137,7 +3322,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 <div className="text-[11px] text-gray-400 mt-0.5">Clients</div>
               </div>
               <div className="text-center p-3 rounded-xl" style={{ background: "#f0fdf4" }}>
-                <div className="text-lg font-bold" style={{ color: "#22c55e" }}>{fmtKESFull(stats.totalCollected)}</div>
+                <div className="text-lg font-bold" style={{ color: "#22c55e" }}>{fmtKESFull(reportContributionTotal)}</div>
                 <div className="text-[11px] text-gray-400 mt-0.5">Total Collected</div>
               </div>
               <div className="text-center p-3 rounded-xl" style={{ background: "#ecfdf5" }}>
@@ -3147,7 +3332,111 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             </div>
           </div>
         )}
+
       </div>
+      </div>
+
+        {/* Shareholders Contribution & Project Profit Report — tablet and desktop only */}
+        <div className="hidden md:block w-full bg-white rounded-2xl border overflow-hidden" style={{ borderColor: "var(--card-border)" }}>
+          <div className="px-4 py-3 border-b flex items-center justify-between gap-3" style={{ borderColor: "var(--border)" }}>
+            <div>
+              <p className="text-sm font-bold" style={{ color: "#1a202c" }}>Shareholders Report</p>
+              <p className="text-[10px] text-gray-400">Contributions and project profits · ascending shareholder order</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-blue-50 text-blue-700">
+                {shareholderReport.length} shareholders
+              </span>
+              <button
+                onClick={exportShareholderReportPdf}
+                disabled={shareholderReport.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-40 transition-colors"
+              >
+                <FileDown size={12} /> Export PDF
+              </button>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-max">
+              <thead>
+                <tr style={{ background: "#4778c5" }}>
+                  <th colSpan={3} className="border-r border-blue-300/60" />
+                  <th colSpan={Math.max(1, shareholderReportProjects.length)} className="px-3 py-2 text-center font-extrabold text-white uppercase tracking-wide border-r border-blue-300/60">
+                    Project Profits
+                  </th>
+                  <th colSpan={2} />
+                </tr>
+                <tr style={{ background: "#4778c5" }}>
+                  {["No", "Name", "Contribution"].map((heading) => (
+                    <th key={heading} className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60 whitespace-nowrap">{heading}</th>
+                  ))}
+                  {shareholderReportProjects.length === 0 ? (
+                    <th className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60">No Projects</th>
+                  ) : shareholderReportProjects.map((project) => (
+                    <th key={project.id} className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60 whitespace-nowrap">{project.name}</th>
+                  ))}
+                  <th className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60 whitespace-nowrap">Total Profit</th>
+                  <th className="px-3 py-2 text-left font-bold text-white whitespace-nowrap">Grand Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shareholderReport.length === 0 ? (
+                  <tr><td colSpan={5 + shareholderReportProjects.length} className="px-4 py-8 text-center text-gray-400">No shareholders found.</td></tr>
+                ) : shareholderReport.map((shareholder, index) => {
+                  const totalProfit = shareholderReportProjects.reduce(
+                    (sum, project) => sum + (shareholder.profits[project.id] ?? 0),
+                    0,
+                  );
+                  return (
+                    <tr key={shareholder.id} className="border-t" style={{ borderColor: "#fff", background: index % 2 === 0 ? "#f8fafc" : "#d6dee9" }}>
+                      <td className="px-3 py-2 font-semibold text-slate-700 border-r border-white">{shareholder.memberNumber || index + 1}.</td>
+                      <td className="px-3 py-2 font-semibold text-slate-900 border-r border-white whitespace-nowrap">{shareholder.name}</td>
+                      <td className="px-3 py-2 font-bold text-slate-800 border-r border-white whitespace-nowrap">{fmtKESFull(shareholder.contribution)}</td>
+                      {shareholderReportProjects.length === 0 ? (
+                        <td className="px-3 py-2 text-gray-400 border-r border-white">—</td>
+                      ) : shareholderReportProjects.map((project) => (
+                        <td key={project.id} className="px-3 py-2 text-slate-700 border-r border-white whitespace-nowrap">
+                          {fmtKESFull(shareholder.profits[project.id] ?? 0)}
+                        </td>
+                      ))}
+                      <td className="px-3 py-2 font-bold text-blue-700 border-r border-white whitespace-nowrap">{fmtKESFull(totalProfit)}</td>
+                      <td className="px-3 py-2 font-extrabold text-slate-950 whitespace-nowrap">{fmtKESFull(shareholder.contribution + totalProfit)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              {shareholderReport.length > 0 && (
+                <tfoot>
+                  <tr style={{ background: "#1e3a5f" }}>
+                    <td colSpan={2} className="px-3 py-2 font-extrabold text-white uppercase">Totals</td>
+                    <td className="px-3 py-2 font-extrabold text-white whitespace-nowrap">
+                      {fmtKESFull(shareholderReport.reduce((sum, row) => sum + row.contribution, 0))}
+                    </td>
+                    {shareholderReportProjects.length === 0 ? (
+                      <td className="px-3 py-2 text-white">—</td>
+                    ) : shareholderReportProjects.map((project) => (
+                      <td key={project.id} className="px-3 py-2 font-bold text-white whitespace-nowrap">
+                        {fmtKESFull(shareholderReport.reduce((sum, row) => sum + (row.profits[project.id] ?? 0), 0))}
+                      </td>
+                    ))}
+                    <td className="px-3 py-2 font-extrabold text-white whitespace-nowrap">
+                      {fmtKESFull(shareholderReport.reduce(
+                        (sum, row) => sum + shareholderReportProjects.reduce((projectSum, project) => projectSum + (row.profits[project.id] ?? 0), 0),
+                        0,
+                      ))}
+                    </td>
+                    <td className="px-3 py-2 font-extrabold text-white whitespace-nowrap">
+                      {fmtKESFull(shareholderReport.reduce(
+                        (sum, row) => sum + row.contribution + shareholderReportProjects.reduce((projectSum, project) => projectSum + (row.profits[project.id] ?? 0), 0),
+                        0,
+                      ))}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
     </div>
 
     {/* ── Total Profits Modal ── */}
