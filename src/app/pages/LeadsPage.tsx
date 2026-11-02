@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  Calendar, MapPin, Users, DollarSign, BarChart2,
+  Calendar, MapPin, Users, BarChart2,
   Plus, Search, Edit2, X, TrendingUp, TrendingDown,
   ChevronLeft, ChevronRight, Target, Activity, Trash2, Eye, AlertTriangle,
+  ClipboardList, PhoneCall, Loader2,
 } from "lucide-react";
 import {
   BarChart as RechartBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -36,6 +37,45 @@ interface Lead {
   siteVisitDate?: string; // ISO date, only relevant when status = "site_scheduled"
 }
 
+interface LeadContactOption {
+  id: number;
+  name: string;
+  phone: string;
+}
+
+interface LeadProjectOption {
+  id: number;
+  name: string;
+  location: string;
+}
+
+interface SiteVisit {
+  id: number;
+  projectId: number | null;
+  projectName: string;
+  location: string;
+  scheduledAt: string;
+  capacity: number;
+  contacts: number | null;
+  details: string;
+  reportedBy: string;
+}
+
+interface OutreachLog {
+  id: number;
+  occurredAt: string;
+  activityType: string;
+  contactId: number;
+  contactName: string;
+  contactPhone: string;
+  outcome: string;
+  status: string;
+  reportedBy: string;
+  projectName: string;
+  siteVisitLabel: string;
+  notes: string;
+}
+
 type PipelineStatus = "contacts" | "contacted" | "site_scheduled" | "converted" | "lost";
 
 const PIPELINE_STAGES: { id: PipelineStatus; label: string; color: string; bg: string }[] = [
@@ -59,6 +99,63 @@ const STATUS_BADGE: Record<PipelineStatus, { label: string; color: string; borde
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAY_LABELS  = ["S","M","T","W","T","F","S"];
+
+function toDateTimeLocal(date = new Date()) {
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return shifted.toISOString().slice(0, 16);
+}
+
+function displayDateTime(value: string) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("en-KE", {
+    timeZone: "Africa/Nairobi",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function useLeadDirectory() {
+  const [contacts, setContacts] = useState<LeadContactOption[]>([]);
+  const [projects, setProjects] = useState<LeadProjectOption[]>([]);
+  const [reporter, setReporter] = useState("Logged-in User");
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from("lead_contacts").select("id, first_name, last_name, phone").order("first_name"),
+      supabase.from("projects").select("id, project_name, location").order("project_name"),
+      supabase.auth.getUser(),
+    ]).then(async ([contactResult, projectResult, authResult]) => {
+      setContacts((contactResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || `Contact #${row.id}`,
+        phone: row.phone ?? "",
+      })));
+      setProjects((projectResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        name: row.project_name ?? `Project #${row.id}`,
+        location: row.location ?? "",
+      })));
+      const user = authResult.data.user;
+      if (!user) return;
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("full_name, role")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (profile?.full_name) {
+        const role = profile.role ? ` (${String(profile.role).replace(/^./, (c) => c.toUpperCase())})` : "";
+        setReporter(`${profile.full_name}${role}`);
+      } else {
+        setReporter(user.email ?? "Logged-in User");
+      }
+    }).catch(() => {});
+  }, []);
+
+  return { contacts, projects, reporter };
+}
 
 function getDaysInMonth(year: number, month: number) {
   return new Date(year, month + 1, 0).getDate();
@@ -967,6 +1064,589 @@ function LeadsSection() {
   );
 }
 
+// ─── Site Visits Section ─────────────────────────────────────────────────────
+
+function SiteVisitsSection() {
+  const { projects, reporter } = useLeadDirectory();
+  const [visits, setVisits] = useState<SiteVisit[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [form, setForm] = useState({
+    projectId: 0,
+    location: "",
+    scheduledAt: toDateTimeLocal(),
+    capacity: "",
+    contacts: "",
+    details: "",
+  });
+
+  const load = () => {
+    setLoading(true);
+    supabase
+      .from("lead_site_visits")
+      .select("*, project:projects(project_name)")
+      .order("scheduled_at", { ascending: false })
+      .then(({ data, error: loadError }) => {
+        if (loadError) throw loadError;
+        setVisits((data ?? []).map((row: any) => ({
+          id: row.id,
+          projectId: row.project_id,
+          projectName: row.project?.project_name ?? "",
+          location: row.location ?? "",
+          scheduledAt: row.scheduled_at,
+          capacity: Number(row.capacity ?? 0),
+          contacts: row.contacts_count == null ? null : Number(row.contacts_count),
+          details: row.details ?? "",
+          reportedBy: row.reported_by ?? "—",
+        })));
+        setError("");
+      })
+      .catch((err) => setError(err?.message ?? "Unable to load site visits. Run the Leads outreach migration in Supabase."))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm({ projectId: 0, location: "", scheduledAt: toDateTimeLocal(), capacity: "", contacts: "", details: "" });
+    setError("");
+    setModalOpen(true);
+  };
+
+  const openEdit = (visit: SiteVisit) => {
+    setEditingId(visit.id);
+    setForm({
+      projectId: visit.projectId ?? 0,
+      location: visit.location,
+      scheduledAt: toDateTimeLocal(new Date(visit.scheduledAt)),
+      capacity: String(visit.capacity),
+      contacts: visit.contacts == null ? "" : String(visit.contacts),
+      details: visit.details,
+    });
+    setError("");
+    setModalOpen(true);
+  };
+
+  const save = async () => {
+    if (!form.location.trim() || !form.scheduledAt || !form.capacity || Number(form.capacity) < 1) {
+      setError("Location, date/time, and capacity are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const payload = {
+        project_id: form.projectId || null,
+        location: form.location.trim(),
+        scheduled_at: new Date(form.scheduledAt).toISOString(),
+        capacity: Number(form.capacity),
+        contacts_count: form.contacts === "" ? null : Number(form.contacts),
+        details: form.details.trim() || null,
+        reported_by: reporter,
+        created_by: auth.user?.id ?? null,
+      };
+      const query = editingId
+        ? supabase.from("lead_site_visits").update(payload).eq("id", editingId)
+        : supabase.from("lead_site_visits").insert(payload);
+      const { error: saveError } = await query;
+      if (saveError) throw saveError;
+      logActivity({
+        category: "other",
+        action: editingId ? "update" : "create",
+        description: `Site visit ${editingId ? "updated" : "scheduled"} at ${form.location}`,
+        actor_name: reporter,
+      });
+      setModalOpen(false);
+      load();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save site visit.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    await supabase.from("lead_site_visits").delete().eq("id", id);
+    setVisits((current) => current.filter((visit) => visit.id !== id));
+    setDeleteId(null);
+  };
+
+  const upcoming = visits.filter((visit) => new Date(visit.scheduledAt).getTime() >= Date.now()).length;
+  const totalCapacity = visits.reduce((sum, visit) => sum + visit.capacity, 0);
+  const contactsRecorded = visits.reduce((sum, visit) => sum + (visit.contacts ?? 0), 0);
+
+  return (
+    <div className="h-full overflow-auto pb-4">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-base font-bold" style={{ color: "#172033" }}>Site Visits</h2>
+          <p className="text-xs mt-0.5 text-gray-500">Schedule visits and add attendance figures later.</p>
+        </div>
+        <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-white bg-violet-600 hover:bg-violet-700">
+          <Plus size={13} /> New Site Visit
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        {[
+          { label: "Upcoming", value: upcoming, color: "#7c3aed" },
+          { label: "Total Capacity", value: totalCapacity, color: "#2563eb" },
+          { label: "Contacts Recorded", value: contactsRecorded, color: "#0f9d8f" },
+        ].map((card) => (
+          <div key={card.label} className="bg-white rounded-xl border p-4" style={{ borderColor: "#e2e8f0" }}>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
+            <p className="text-xl font-extrabold mt-1" style={{ color: card.color }}>{card.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {error && !modalOpen && (
+        <div className="mb-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">{error}</div>
+      )}
+
+      <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "#e2e8f0" }}>
+        {loading ? (
+          <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-violet-500" /></div>
+        ) : visits.length === 0 ? (
+          <div className="py-12 text-center">
+            <MapPin size={30} className="mx-auto mb-2 text-gray-300" />
+            <p className="text-sm font-semibold text-gray-400">No site visits scheduled</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="bg-slate-50">
+                {["LOCATION", "PROJECT", "DATE / TIME", "CAPACITY", "CONTACTS", "REPORTED BY", "ACTION"].map((heading) => (
+                  <th key={heading} className="px-4 py-3 text-left text-[10px] font-bold tracking-wide text-gray-400 whitespace-nowrap">{heading}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {visits.map((visit) => (
+                  <tr key={visit.id} className="border-t hover:bg-violet-50/30" style={{ borderColor: "#f1f5f9" }}>
+                    <td className="px-4 py-3 font-semibold text-slate-800 whitespace-nowrap">{visit.location}</td>
+                    <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{visit.projectName || "—"}</td>
+                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{displayDateTime(visit.scheduledAt)}</td>
+                    <td className="px-4 py-3 font-bold text-blue-600">{visit.capacity}</td>
+                    <td className="px-4 py-3">
+                      {visit.contacts == null
+                        ? <span className="text-[10px] px-2 py-1 rounded-full bg-gray-100 text-gray-500">Add later</span>
+                        : <span className="font-bold text-teal-600">{visit.contacts}</span>}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{visit.reportedBy}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => openEdit(visit)} className="p-1.5 rounded hover:bg-violet-50" title="Edit">
+                          <Edit2 size={13} className="text-violet-600" />
+                        </button>
+                        <button onClick={() => setDeleteId(visit.id)} className="p-1.5 rounded hover:bg-red-50" title="Delete">
+                          <Trash2 size={13} className="text-red-500" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="px-5 py-4 flex items-center justify-between border-b bg-violet-50 border-violet-100">
+              <div>
+                <h3 className="font-bold text-base text-slate-900">{editingId ? "Edit Site Visit" : "New Site Visit"}</h3>
+                <p className="text-xs text-slate-500">{editingId ? "Update attendance or visit details." : "Schedule capacity now; contacts can be entered later."}</p>
+              </div>
+              <button onClick={() => setModalOpen(false)} className="p-1.5 rounded-lg hover:bg-violet-100"><X size={16} /></button>
+            </div>
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {error && <div className="sm:col-span-2 px-3 py-2 rounded-lg bg-red-50 text-xs text-red-600">{error}</div>}
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Project (optional)</label>
+                <select value={form.projectId} onChange={(e) => {
+                  const projectId = Number(e.target.value);
+                  const project = projects.find((item) => item.id === projectId);
+                  setForm((current) => ({ ...current, projectId, location: project?.location || current.location }));
+                }} className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
+                  <option value={0}>Select project or enter a location</option>
+                  {projects.map((project) => <option key={project.id} value={project.id}>{project.name} — {project.location}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Location *</label>
+                <input value={form.location} onChange={(e) => setForm((current) => ({ ...current, location: e.target.value }))}
+                  placeholder="e.g. Kitengela Phase 2" className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Date / Time *</label>
+                <input type="datetime-local" value={form.scheduledAt} onChange={(e) => setForm((current) => ({ ...current, scheduledAt: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Capacity *</label>
+                <input type="number" min={1} value={form.capacity} onChange={(e) => setForm((current) => ({ ...current, capacity: e.target.value }))}
+                  placeholder="Expected visitors" className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Contacts <span className="font-normal text-gray-400">(optional)</span></label>
+                <input type="number" min={0} value={form.contacts} onChange={(e) => setForm((current) => ({ ...current, contacts: e.target.value }))}
+                  placeholder="Can be filled later" className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Visit Details</label>
+                <textarea value={form.details} onChange={(e) => setForm((current) => ({ ...current, details: e.target.value }))}
+                  rows={3} placeholder="Meeting point, transport, special instructions…" className="w-full border rounded-xl px-3 py-2.5 text-sm resize-none" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div className="sm:col-span-2 rounded-xl bg-slate-50 px-3 py-2.5">
+                <span className="text-[10px] uppercase font-bold text-gray-400">Reported By</span>
+                <p className="text-sm font-semibold text-slate-700">{reporter}</p>
+              </div>
+            </div>
+            <div className="px-5 pb-5 flex justify-end gap-2">
+              <button onClick={() => setModalOpen(false)} className="px-4 py-2.5 rounded-xl border text-sm font-semibold text-gray-500" style={{ borderColor: "#e2e8f0" }}>Cancel</button>
+              <button onClick={save} disabled={saving} className="px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-violet-600 disabled:opacity-50 flex items-center gap-2">
+                {saving && <Loader2 size={13} className="animate-spin" />} {editingId ? "Save Changes" : "Save Site Visit"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteId !== null && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xs p-5">
+            <h3 className="font-bold text-sm text-slate-900">Delete site visit?</h3>
+            <p className="text-xs text-gray-500 mt-1 mb-4">Linked outreach records will keep their activity information.</p>
+            <div className="flex gap-2">
+              <button onClick={() => setDeleteId(null)} className="flex-1 py-2 rounded-lg border text-xs font-semibold text-gray-500">Cancel</button>
+              <button onClick={() => remove(deleteId)} className="flex-1 py-2 rounded-lg text-xs font-bold text-white bg-red-600">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Daily Outreach Log ──────────────────────────────────────────────────────
+
+function DailyOutreachSection() {
+  const { contacts, projects, reporter } = useLeadDirectory();
+  const [siteVisits, setSiteVisits] = useState<SiteVisit[]>([]);
+  const [logs, setLogs] = useState<OutreachLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [dateFilter, setDateFilter] = useState(new Date().toISOString().slice(0, 10));
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [form, setForm] = useState({
+    occurredAt: toDateTimeLocal(),
+    activityType: "Call",
+    contactId: 0,
+    outcome: "",
+    status: "Follow-up",
+    projectId: 0,
+    siteVisitId: 0,
+    notes: "",
+  });
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      supabase
+        .from("lead_outreach_logs")
+        .select("*, contact:lead_contacts(first_name,last_name,phone), project:projects(project_name), site_visit:lead_site_visits(location,scheduled_at)")
+        .order("occurred_at", { ascending: false }),
+      supabase
+        .from("lead_site_visits")
+        .select("*, project:projects(project_name)")
+        .order("scheduled_at", { ascending: false }),
+    ]).then(([logResult, visitResult]) => {
+      if (logResult.error) throw logResult.error;
+      if (visitResult.error) throw visitResult.error;
+      setLogs((logResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        occurredAt: row.occurred_at,
+        activityType: row.activity_type,
+        contactId: row.contact_id,
+        contactName: `${row.contact?.first_name ?? ""} ${row.contact?.last_name ?? ""}`.trim() || "—",
+        contactPhone: row.contact?.phone ?? "",
+        outcome: row.outcome ?? "",
+        status: row.status ?? "",
+        reportedBy: row.reported_by ?? "—",
+        projectName: row.project?.project_name ?? "",
+        siteVisitLabel: row.site_visit ? `${row.site_visit.location} · ${displayDateTime(row.site_visit.scheduled_at)}` : "",
+        notes: row.notes ?? "",
+      })));
+      setSiteVisits((visitResult.data ?? []).map((row: any) => ({
+        id: row.id,
+        projectId: row.project_id,
+        projectName: row.project?.project_name ?? "",
+        location: row.location,
+        scheduledAt: row.scheduled_at,
+        capacity: Number(row.capacity ?? 0),
+        contacts: row.contacts_count == null ? null : Number(row.contacts_count),
+        details: row.details ?? "",
+        reportedBy: row.reported_by ?? "",
+      })));
+      setError("");
+    }).catch((err) => setError(err?.message ?? "Unable to load outreach logs. Run the Leads outreach migration in Supabase."))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const openCreate = () => {
+    setForm({ occurredAt: toDateTimeLocal(), activityType: "Call", contactId: 0, outcome: "", status: "Follow-up", projectId: 0, siteVisitId: 0, notes: "" });
+    setError("");
+    setModalOpen(true);
+  };
+
+  const save = async () => {
+    if (!form.occurredAt || !form.activityType || !form.contactId || !form.outcome.trim() || !form.status) {
+      setError("Date/time, activity type, contact, outcome, and status are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const { error: saveError } = await supabase.from("lead_outreach_logs").insert({
+        occurred_at: new Date(form.occurredAt).toISOString(),
+        activity_type: form.activityType,
+        contact_id: form.contactId,
+        outcome: form.outcome.trim(),
+        status: form.status,
+        reported_by: reporter,
+        reported_by_user_id: auth.user?.id ?? null,
+        project_id: form.projectId || null,
+        site_visit_id: form.siteVisitId || null,
+        notes: form.notes.trim() || null,
+      });
+      if (saveError) throw saveError;
+      logActivity({ category: "other", action: "create", description: `${form.activityType} outreach logged`, actor_name: reporter });
+      setModalOpen(false);
+      load();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save outreach log.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    await supabase.from("lead_outreach_logs").delete().eq("id", id);
+    setLogs((current) => current.filter((log) => log.id !== id));
+    setDeleteId(null);
+  };
+
+  const filtered = logs.filter((log) => {
+    const eatDate = new Date(log.occurredAt).toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+    if (dateFilter && eatDate !== dateFilter) return false;
+    const query = search.trim().toLowerCase();
+    return !query || `${log.contactName} ${log.contactPhone} ${log.activityType} ${log.outcome} ${log.notes}`.toLowerCase().includes(query);
+  });
+  const calls = filtered.filter((log) => log.activityType === "Call").length;
+  const newProspects = filtered.filter((log) => log.activityType === "New Lead").length;
+  const visitBookings = filtered.filter((log) => log.activityType === "Site Visit").length;
+  const followUps = filtered.filter((log) => log.status === "Follow-up").length;
+
+  const statusStyle = (status: string) => {
+    if (status === "Confirmed" || status === "Converted") return "bg-green-100 text-green-700";
+    if (status === "Not Interested") return "bg-red-100 text-red-700";
+    if (status === "New") return "bg-violet-100 text-violet-700";
+    if (status === "Site Visit") return "bg-blue-100 text-blue-700";
+    return "bg-amber-100 text-amber-700";
+  };
+
+  return (
+    <div className="h-full overflow-auto pb-4">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-base font-bold text-slate-900">Daily Outreach Log</h2>
+          <p className="text-xs text-gray-500 mt-0.5">Track daily calls, follow-ups, prospects and site visit bookings.</p>
+        </div>
+        <button onClick={openCreate} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-white bg-violet-600 hover:bg-violet-700">
+          <Plus size={13} /> New Log Entry
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3 mb-4">
+        <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}
+          className="border rounded-xl px-3 py-2.5 text-sm bg-white" style={{ borderColor: "#e2e8f0" }} />
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by contact, phone, activity or outcome…"
+            className="w-full border rounded-xl pl-9 pr-3 py-2.5 text-sm bg-white" style={{ borderColor: "#e2e8f0" }} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        {[
+          { label: "Total Calls Made", value: calls, color: "#10b981", icon: <PhoneCall size={17} /> },
+          { label: "New Prospects", value: newProspects, color: "#3b82f6", icon: <Users size={17} /> },
+          { label: "Site Visit Bookings", value: visitBookings, color: "#a855f7", icon: <Calendar size={17} /> },
+          { label: "Follow-ups", value: followUps, color: "#f59e0b", icon: <ClipboardList size={17} /> },
+        ].map((card) => (
+          <div key={card.label} className="bg-white border rounded-xl p-4 flex items-center gap-3" style={{ borderColor: "#e2e8f0" }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${card.color}18`, color: card.color }}>{card.icon}</div>
+            <div>
+              <p className="text-[10px] font-semibold text-gray-400">{card.label}</p>
+              <p className="text-xl font-extrabold text-slate-900">{card.value}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {error && !modalOpen && <div className="mb-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800">{error}</div>}
+
+      <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "#e2e8f0" }}>
+        <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "#e2e8f0" }}>
+          <h3 className="text-sm font-bold text-slate-900">Today's Outreach Log</h3>
+          <span className="text-xs text-gray-400">{filtered.length} entries</span>
+        </div>
+        {loading ? (
+          <div className="flex justify-center py-12"><Loader2 size={20} className="animate-spin text-violet-500" /></div>
+        ) : filtered.length === 0 ? (
+          <div className="py-12 text-center"><ClipboardList size={30} className="mx-auto mb-2 text-gray-300" /><p className="text-sm text-gray-400">No outreach logged for this date.</p></div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="bg-slate-50">
+                {["DATE / TIME", "ACTIVITY", "CONTACT", "PHONE", "OUTCOME", "STATUS", "PROJECT / SITE VISIT", "REPORTED BY", "ACTION"].map((heading) => (
+                  <th key={heading} className="px-3 py-3 text-left text-[10px] font-bold tracking-wide text-gray-400 whitespace-nowrap">{heading}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {filtered.map((log) => (
+                  <tr key={log.id} className="border-t hover:bg-violet-50/30" style={{ borderColor: "#f1f5f9" }}>
+                    <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{displayDateTime(log.occurredAt)}</td>
+                    <td className="px-3 py-3 font-semibold text-violet-700 whitespace-nowrap">{log.activityType}</td>
+                    <td className="px-3 py-3 font-semibold text-slate-800 whitespace-nowrap">{log.contactName}</td>
+                    <td className="px-3 py-3 font-mono text-slate-500 whitespace-nowrap">{log.contactPhone}</td>
+                    <td className="px-3 py-3 text-slate-600 min-w-44">{log.outcome}</td>
+                    <td className="px-3 py-3"><span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${statusStyle(log.status)}`}>{log.status}</span></td>
+                    <td className="px-3 py-3 text-slate-500 min-w-44">{log.siteVisitLabel || log.projectName || "—"}</td>
+                    <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{log.reportedBy}</td>
+                    <td className="px-3 py-3"><button onClick={() => setDeleteId(log.id)} className="p-1.5 rounded hover:bg-red-50"><Trash2 size={13} className="text-red-500" /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b flex items-center justify-between bg-violet-50 border-violet-100">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">New Log Entry</h3>
+                <p className="text-xs text-gray-500">Record your daily activity and customer interaction.</p>
+              </div>
+              <button onClick={() => setModalOpen(false)} className="p-1.5 rounded-lg hover:bg-violet-100"><X size={17} /></button>
+            </div>
+            <div className="p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4">
+              {error && <div className="md:col-span-2 px-3 py-2 rounded-lg bg-red-50 text-xs text-red-600">{error}</div>}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Date / Time *</label>
+                <input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm((current) => ({ ...current, occurredAt: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Activity Type *</label>
+                <select value={form.activityType} onChange={(e) => setForm((current) => ({ ...current, activityType: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
+                  {["Call", "New Lead", "Follow-up", "Site Visit", "Email", "Meeting", "WhatsApp"].map((value) => <option key={value}>{value}</option>)}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Contact / Prospect *</label>
+                <select value={form.contactId} onChange={(e) => setForm((current) => ({ ...current, contactId: Number(e.target.value) }))}
+                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
+                  <option value={0}>Select from available contacts</option>
+                  {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name} — {contact.phone}</option>)}
+                </select>
+                {contacts.length === 0 && <p className="text-[10px] text-amber-600 mt-1">Add contacts in the Leads submenu first.</p>}
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Outcome / Next Step *</label>
+                <input value={form.outcome} onChange={(e) => setForm((current) => ({ ...current, outcome: e.target.value }))}
+                  placeholder="e.g. Interested, follow-up required, site visit booked…" className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Status *</label>
+                <select value={form.status} onChange={(e) => setForm((current) => ({ ...current, status: e.target.value }))}
+                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
+                  {["New", "Follow-up", "Site Visit", "Confirmed", "Converted", "Not Interested"].map((value) => <option key={value}>{value}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Project (optional)</label>
+                <select value={form.projectId} onChange={(e) => setForm((current) => ({ ...current, projectId: Number(e.target.value) }))}
+                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
+                  <option value={0}>Select project</option>
+                  {projects.map((project) => <option key={project.id} value={project.id}>{project.name} — {project.location}</option>)}
+                </select>
+              </div>
+              <div className="md:col-span-2 rounded-xl border p-4 bg-violet-50/60" style={{ borderColor: "#ddd6fe" }}>
+                <label className="block text-xs font-bold text-violet-700 mb-1">Site Visit Details (optional)</label>
+                <select value={form.siteVisitId} onChange={(e) => {
+                  const siteVisitId = Number(e.target.value);
+                  const visit = siteVisits.find((item) => item.id === siteVisitId);
+                  setForm((current) => ({ ...current, siteVisitId, projectId: visit?.projectId ?? current.projectId }));
+                }} className="w-full border rounded-xl px-3 py-2.5 text-sm bg-white" style={{ borderColor: "#ddd6fe" }}>
+                  <option value={0}>Select a visit from the Site Visits submenu</option>
+                  {siteVisits.map((visit) => <option key={visit.id} value={visit.id}>{visit.location} — {displayDateTime(visit.scheduledAt)}</option>)}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Details / Notes</label>
+                <textarea value={form.notes} onChange={(e) => setForm((current) => ({ ...current, notes: e.target.value }))}
+                  rows={3} placeholder="Add detailed notes about the interaction…" className="w-full border rounded-xl px-3 py-2.5 text-sm resize-none" style={{ borderColor: "#e2e8f0" }} />
+              </div>
+              <div className="md:col-span-2 rounded-xl bg-slate-50 px-3 py-2.5">
+                <span className="text-[10px] uppercase font-bold text-gray-400">Reported By</span>
+                <p className="text-sm font-semibold text-slate-700">{reporter}</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t flex justify-end gap-2" style={{ borderColor: "#e2e8f0" }}>
+              <button onClick={() => setModalOpen(false)} className="px-4 py-2.5 rounded-xl border text-sm font-semibold text-gray-500" style={{ borderColor: "#e2e8f0" }}>Cancel</button>
+              <button onClick={save} disabled={saving} className="px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-violet-600 disabled:opacity-50 flex items-center gap-2">
+                {saving && <Loader2 size={13} className="animate-spin" />} Save Entry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteId !== null && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xs p-5">
+            <h3 className="font-bold text-sm text-slate-900">Delete outreach entry?</h3>
+            <p className="text-xs text-gray-500 mt-1 mb-4">This action cannot be undone.</p>
+            <div className="flex gap-2">
+              <button onClick={() => setDeleteId(null)} className="flex-1 py-2 rounded-lg border text-xs font-semibold text-gray-500">Cancel</button>
+              <button onClick={() => remove(deleteId)} className="flex-1 py-2 rounded-lg text-xs font-bold text-white bg-red-600">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Analysis Section — real data from DB ────────────────────────────────────
 
 function AnalysisSection() {
@@ -1160,11 +1840,13 @@ function AnalysisSection() {
 
 // ─── Leads Page ───────────────────────────────────────────────────────────────
 
-type LeadsTab = "events" | "leads" | "analysis";
+type LeadsTab = "events" | "leads" | "site-visits" | "outreach" | "analysis";
 
 const LEADS_TABS: { id: LeadsTab; label: string; icon: React.ReactNode }[] = [
   { id: "events",   label: "EVENTS",   icon: <Calendar  size={15} /> },
   { id: "leads",    label: "LEADS",    icon: <Users     size={15} /> },
+  { id: "site-visits", label: "SITE VISITS", icon: <MapPin size={15} /> },
+  { id: "outreach", label: "DAILY OUTREACH LOG", icon: <ClipboardList size={15} /> },
   { id: "analysis", label: "ANALYSIS", icon: <BarChart2 size={15} /> },
 ];
 
@@ -1206,6 +1888,8 @@ export function LeadsPage() {
         <div className="flex-1 overflow-hidden p-4 md:p-5">
           {activeTab === "events"   && <EventsSection />}
           {activeTab === "leads"    && <LeadsSection />}
+          {activeTab === "site-visits" && <SiteVisitsSection />}
+          {activeTab === "outreach" && <DailyOutreachSection />}
           {activeTab === "analysis" && <AnalysisSection />}
         </div>
       </div>

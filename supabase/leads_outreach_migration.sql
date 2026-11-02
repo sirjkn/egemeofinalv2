@@ -1,0 +1,56 @@
+-- Leads: Site Visits and Daily Outreach Log
+-- Run once in Supabase Dashboard -> SQL Editor.
+
+create table if not exists public.lead_site_visits (
+  id bigserial primary key,
+  project_id bigint references public.projects(id) on delete set null,
+  location text not null,
+  scheduled_at timestamptz not null,
+  capacity integer not null check (capacity > 0),
+  contacts_count integer check (contacts_count is null or contacts_count >= 0),
+  details text,
+  reported_by text not null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.lead_outreach_logs (
+  id bigserial primary key,
+  occurred_at timestamptz not null,
+  activity_type text not null,
+  contact_id bigint not null references public.lead_contacts(id) on delete restrict,
+  outcome text not null,
+  status text not null,
+  reported_by text not null,
+  reported_by_user_id uuid references auth.users(id) on delete set null,
+  project_id bigint references public.projects(id) on delete set null,
+  site_visit_id bigint references public.lead_site_visits(id) on delete set null,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists lead_site_visits_scheduled_at_idx
+  on public.lead_site_visits (scheduled_at desc);
+create index if not exists lead_outreach_logs_occurred_at_idx
+  on public.lead_outreach_logs (occurred_at desc);
+create index if not exists lead_outreach_logs_contact_id_idx
+  on public.lead_outreach_logs (contact_id);
+
+alter table public.lead_site_visits enable row level security;
+alter table public.lead_outreach_logs enable row level security;
+
+drop policy if exists "Authenticated users manage lead site visits" on public.lead_site_visits;
+create policy "Authenticated users manage lead site visits"
+  on public.lead_site_visits
+  for all
+  to authenticated
+  using (true)
+  with check (true);
+
+drop policy if exists "Authenticated users manage outreach logs" on public.lead_outreach_logs;
+create policy "Authenticated users manage outreach logs"
+  on public.lead_outreach_logs
+  for all
+  to authenticated
+  using (true)
+  with check (true);
