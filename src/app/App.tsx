@@ -2755,6 +2755,10 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     contribution: number;
     profits: Record<number, number>;
   }>>([]);
+  const [shareholderReportProjectFilter, setShareholderReportProjectFilter] = useState<"all" | number>("all");
+  const [shareholderReportSort, setShareholderReportSort] = useState<
+    "member-asc" | "member-desc" | "name-asc" | "name-desc" | "contribution-desc" | "contribution-asc" | "profit-desc" | "profit-asc" | "grand-desc" | "grand-asc"
+  >("member-asc");
 
   const loadAdminStats = async () => {
     const now = new Date(); const { month, year } = getBillingPeriod(now);
@@ -3002,22 +3006,43 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     0,
   );
   const reportGrandTotal = reportContributionTotal + reportProfitTotal;
+  const visibleReportProjects = shareholderReportProjectFilter === "all"
+    ? shareholderReportProjects
+    : shareholderReportProjects.filter((project) => project.id === shareholderReportProjectFilter);
+  const profitForVisibleProjects = (row: typeof shareholderReport[number]) =>
+    visibleReportProjects.reduce((sum, project) => sum + (row.profits[project.id] ?? 0), 0);
+  const visibleShareholderReport = [...shareholderReport].sort((a, b) => {
+    const aProfit = profitForVisibleProjects(a);
+    const bProfit = profitForVisibleProjects(b);
+    switch (shareholderReportSort) {
+      case "member-desc": return b.memberNumber - a.memberNumber || b.name.localeCompare(a.name);
+      case "name-asc": return a.name.localeCompare(b.name);
+      case "name-desc": return b.name.localeCompare(a.name);
+      case "contribution-desc": return b.contribution - a.contribution || a.memberNumber - b.memberNumber;
+      case "contribution-asc": return a.contribution - b.contribution || a.memberNumber - b.memberNumber;
+      case "profit-desc": return bProfit - aProfit || a.memberNumber - b.memberNumber;
+      case "profit-asc": return aProfit - bProfit || a.memberNumber - b.memberNumber;
+      case "grand-desc": return (b.contribution + bProfit) - (a.contribution + aProfit) || a.memberNumber - b.memberNumber;
+      case "grand-asc": return (a.contribution + aProfit) - (b.contribution + bProfit) || a.memberNumber - b.memberNumber;
+      default: return a.memberNumber - b.memberNumber || a.name.localeCompare(b.name);
+    }
+  });
 
   const exportShareholderReportPdf = async () => {
-    if (shareholderReport.length === 0) return;
+    if (visibleShareholderReport.length === 0) return;
     const company = await getCompanyDetails();
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
     const money = (value: number) => Number(value || 0).toLocaleString("en-KE", { maximumFractionDigits: 2 });
     const projectTotals = Object.fromEntries(
-      shareholderReportProjects.map((project) => [
+      visibleReportProjects.map((project) => [
         project.id,
-        shareholderReport.reduce((sum, row) => sum + (row.profits[project.id] ?? 0), 0),
+        visibleShareholderReport.reduce((sum, row) => sum + (row.profits[project.id] ?? 0), 0),
       ]),
     );
-    const contributionTotal = shareholderReport.reduce((sum, row) => sum + row.contribution, 0);
-    const profitTotal = shareholderReport.reduce(
-      (sum, row) => sum + shareholderReportProjects.reduce(
+    const contributionTotal = visibleShareholderReport.reduce((sum, row) => sum + row.contribution, 0);
+    const profitTotal = visibleShareholderReport.reduce(
+      (sum, row) => sum + visibleReportProjects.reduce(
         (projectSum, project) => projectSum + (row.profits[project.id] ?? 0),
         0,
       ),
@@ -3045,7 +3070,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         { content: "", colSpan: 3, styles: { fillColor: [71, 120, 197] } },
         {
           content: "PROJECT PROFITS",
-          colSpan: Math.max(1, shareholderReportProjects.length),
+          colSpan: Math.max(1, visibleReportProjects.length),
           styles: { halign: "center", fillColor: [71, 120, 197], textColor: 255, fontStyle: "bold" },
         },
         { content: "", colSpan: 2, styles: { fillColor: [71, 120, 197] } },
@@ -3054,13 +3079,13 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         "No",
         "Name",
         "Contribution",
-        ...shareholderReportProjects.map((project) => project.name),
+        ...(visibleReportProjects.length ? visibleReportProjects.map((project) => project.name) : ["No Projects"]),
         "Total Profit",
         "Grand Total",
       ],
     ];
-    const body = shareholderReport.map((shareholder, index) => {
-      const totalProfit = shareholderReportProjects.reduce(
+    const body = visibleShareholderReport.map((shareholder, index) => {
+      const totalProfit = visibleReportProjects.reduce(
         (sum, project) => sum + (shareholder.profits[project.id] ?? 0),
         0,
       );
@@ -3068,7 +3093,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         shareholder.memberNumber || index + 1,
         shareholder.name,
         money(shareholder.contribution),
-        ...shareholderReportProjects.map((project) => money(shareholder.profits[project.id] ?? 0)),
+        ...(visibleReportProjects.length ? visibleReportProjects.map((project) => money(shareholder.profits[project.id] ?? 0)) : ["—"]),
         money(totalProfit),
         money(shareholder.contribution + totalProfit),
       ];
@@ -3077,7 +3102,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       "",
       "TOTALS",
       money(contributionTotal),
-      ...shareholderReportProjects.map((project) => money(projectTotals[project.id] ?? 0)),
+      ...(visibleReportProjects.length ? visibleReportProjects.map((project) => money(projectTotals[project.id] ?? 0)) : ["—"]),
       money(profitTotal),
       money(contributionTotal + profitTotal),
     ]];
@@ -3088,7 +3113,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       body,
       foot,
       theme: "grid",
-      styles: { fontSize: shareholderReportProjects.length > 6 ? 5.5 : 6.5, cellPadding: 1.6, overflow: "linebreak" },
+      styles: { fontSize: visibleReportProjects.length > 6 ? 5.5 : 6.5, cellPadding: 1.6, overflow: "linebreak" },
       headStyles: { fillColor: [71, 120, 197], textColor: 255, fontStyle: "bold", halign: "left" },
       footStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: "bold" },
       alternateRowStyles: { fillColor: [225, 231, 239] },
@@ -3104,7 +3129,10 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       horizontalPageBreak: true,
       horizontalPageBreakRepeat: [0, 1, 2],
     });
-    doc.save(`shareholders-profit-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+    const projectSuffix = shareholderReportProjectFilter === "all"
+      ? "all-projects"
+      : visibleReportProjects[0]?.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "project";
+    doc.save(`shareholders-profit-report-${projectSuffix}-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   return (
@@ -3345,23 +3373,76 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-blue-50 text-blue-700">
-                {shareholderReport.length} shareholders
+                {visibleShareholderReport.length} shareholders
               </span>
               <button
                 onClick={exportShareholderReportPdf}
-                disabled={shareholderReport.length === 0}
+                disabled={visibleShareholderReport.length === 0}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold text-white bg-blue-700 hover:bg-blue-800 disabled:opacity-40 transition-colors"
               >
                 <FileDown size={12} /> Export PDF
               </button>
             </div>
           </div>
+          <div className="px-4 py-3 border-b bg-slate-50 flex flex-wrap items-end gap-3" style={{ borderColor: "var(--border)" }}>
+            <div className="min-w-[180px]">
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Filter by Project</label>
+              <select
+                value={shareholderReportProjectFilter}
+                onChange={(e) => setShareholderReportProjectFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
+                className="w-full border rounded-lg px-3 py-2 text-xs font-semibold bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                style={{ borderColor: "#cbd5e1" }}
+              >
+                <option value="all">All Projects</option>
+                {shareholderReportProjects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-[210px]">
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Sort By</label>
+              <select
+                value={shareholderReportSort}
+                onChange={(e) => setShareholderReportSort(e.target.value as typeof shareholderReportSort)}
+                className="w-full border rounded-lg px-3 py-2 text-xs font-semibold bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                style={{ borderColor: "#cbd5e1" }}
+              >
+                <option value="member-asc">Shareholder No. — Ascending</option>
+                <option value="member-desc">Shareholder No. — Descending</option>
+                <option value="name-asc">Name — A to Z</option>
+                <option value="name-desc">Name — Z to A</option>
+                <option value="contribution-desc">Contribution — Highest First</option>
+                <option value="contribution-asc">Contribution — Lowest First</option>
+                <option value="profit-desc">Total Profit — Highest First</option>
+                <option value="profit-asc">Total Profit — Lowest First</option>
+                <option value="grand-desc">Grand Total — Highest First</option>
+                <option value="grand-asc">Grand Total — Lowest First</option>
+              </select>
+            </div>
+            {(shareholderReportProjectFilter !== "all" || shareholderReportSort !== "member-asc") && (
+              <button
+                onClick={() => {
+                  setShareholderReportProjectFilter("all");
+                  setShareholderReportSort("member-asc");
+                }}
+                className="px-3 py-2 rounded-lg border text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100"
+                style={{ borderColor: "#cbd5e1" }}
+              >
+                Reset
+              </button>
+            )}
+            <p className="ml-auto text-[10px] text-gray-400 pb-2">
+              {shareholderReportProjectFilter === "all"
+                ? `Showing ${shareholderReportProjects.length} projects`
+                : `Showing ${visibleReportProjects[0]?.name ?? "selected project"}`}
+            </p>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs min-w-max">
               <thead>
                 <tr style={{ background: "#4778c5" }}>
                   <th colSpan={3} className="border-r border-blue-300/60" />
-                  <th colSpan={Math.max(1, shareholderReportProjects.length)} className="px-3 py-2 text-center font-extrabold text-white uppercase tracking-wide border-r border-blue-300/60">
+                  <th colSpan={Math.max(1, visibleReportProjects.length)} className="px-3 py-2 text-center font-extrabold text-white uppercase tracking-wide border-r border-blue-300/60">
                     Project Profits
                   </th>
                   <th colSpan={2} />
@@ -3370,9 +3451,9 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                   {["No", "Name", "Contribution"].map((heading) => (
                     <th key={heading} className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60 whitespace-nowrap">{heading}</th>
                   ))}
-                  {shareholderReportProjects.length === 0 ? (
+                  {visibleReportProjects.length === 0 ? (
                     <th className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60">No Projects</th>
-                  ) : shareholderReportProjects.map((project) => (
+                  ) : visibleReportProjects.map((project) => (
                     <th key={project.id} className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60 whitespace-nowrap">{project.name}</th>
                   ))}
                   <th className="px-3 py-2 text-left font-bold text-white border-r border-blue-300/60 whitespace-nowrap">Total Profit</th>
@@ -3380,10 +3461,10 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 </tr>
               </thead>
               <tbody>
-                {shareholderReport.length === 0 ? (
-                  <tr><td colSpan={5 + shareholderReportProjects.length} className="px-4 py-8 text-center text-gray-400">No shareholders found.</td></tr>
-                ) : shareholderReport.map((shareholder, index) => {
-                  const totalProfit = shareholderReportProjects.reduce(
+                {visibleShareholderReport.length === 0 ? (
+                  <tr><td colSpan={5 + visibleReportProjects.length} className="px-4 py-8 text-center text-gray-400">No shareholders found.</td></tr>
+                ) : visibleShareholderReport.map((shareholder, index) => {
+                  const totalProfit = visibleReportProjects.reduce(
                     (sum, project) => sum + (shareholder.profits[project.id] ?? 0),
                     0,
                   );
@@ -3392,9 +3473,9 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                       <td className="px-3 py-2 font-semibold text-slate-700 border-r border-white">{shareholder.memberNumber || index + 1}.</td>
                       <td className="px-3 py-2 font-semibold text-slate-900 border-r border-white whitespace-nowrap">{shareholder.name}</td>
                       <td className="px-3 py-2 font-bold text-slate-800 border-r border-white whitespace-nowrap">{fmtKESFull(shareholder.contribution)}</td>
-                      {shareholderReportProjects.length === 0 ? (
+                      {visibleReportProjects.length === 0 ? (
                         <td className="px-3 py-2 text-gray-400 border-r border-white">—</td>
-                      ) : shareholderReportProjects.map((project) => (
+                      ) : visibleReportProjects.map((project) => (
                         <td key={project.id} className="px-3 py-2 text-slate-700 border-r border-white whitespace-nowrap">
                           {fmtKESFull(shareholder.profits[project.id] ?? 0)}
                         </td>
@@ -3405,29 +3486,29 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                   );
                 })}
               </tbody>
-              {shareholderReport.length > 0 && (
+              {visibleShareholderReport.length > 0 && (
                 <tfoot>
                   <tr style={{ background: "#1e3a5f" }}>
                     <td colSpan={2} className="px-3 py-2 font-extrabold text-white uppercase">Totals</td>
                     <td className="px-3 py-2 font-extrabold text-white whitespace-nowrap">
-                      {fmtKESFull(shareholderReport.reduce((sum, row) => sum + row.contribution, 0))}
+                      {fmtKESFull(visibleShareholderReport.reduce((sum, row) => sum + row.contribution, 0))}
                     </td>
-                    {shareholderReportProjects.length === 0 ? (
+                    {visibleReportProjects.length === 0 ? (
                       <td className="px-3 py-2 text-white">—</td>
-                    ) : shareholderReportProjects.map((project) => (
+                    ) : visibleReportProjects.map((project) => (
                       <td key={project.id} className="px-3 py-2 font-bold text-white whitespace-nowrap">
-                        {fmtKESFull(shareholderReport.reduce((sum, row) => sum + (row.profits[project.id] ?? 0), 0))}
+                        {fmtKESFull(visibleShareholderReport.reduce((sum, row) => sum + (row.profits[project.id] ?? 0), 0))}
                       </td>
                     ))}
                     <td className="px-3 py-2 font-extrabold text-white whitespace-nowrap">
-                      {fmtKESFull(shareholderReport.reduce(
-                        (sum, row) => sum + shareholderReportProjects.reduce((projectSum, project) => projectSum + (row.profits[project.id] ?? 0), 0),
+                      {fmtKESFull(visibleShareholderReport.reduce(
+                        (sum, row) => sum + visibleReportProjects.reduce((projectSum, project) => projectSum + (row.profits[project.id] ?? 0), 0),
                         0,
                       ))}
                     </td>
                     <td className="px-3 py-2 font-extrabold text-white whitespace-nowrap">
-                      {fmtKESFull(shareholderReport.reduce(
-                        (sum, row) => sum + row.contribution + shareholderReportProjects.reduce((projectSum, project) => projectSum + (row.profits[project.id] ?? 0), 0),
+                      {fmtKESFull(visibleShareholderReport.reduce(
+                        (sum, row) => sum + row.contribution + visibleReportProjects.reduce((projectSum, project) => projectSum + (row.profits[project.id] ?? 0), 0),
                         0,
                       ))}
                     </td>
