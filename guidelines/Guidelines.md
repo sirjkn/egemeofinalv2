@@ -1,4 +1,11 @@
-**Add your own guidelines here**
+## Egemeo Ardhi UI direction
+
+- Use a crisp, operational administration aesthetic: white work surfaces, cool slate structure, violet for Leads workflows, and amber only for reminders.
+- Keep dense forms highly scannable with numbered sections, compact labels, contextual panels, and clear required-field markers.
+- Use Plus Jakarta Sans for interface hierarchy and Inter for compact body/data text.
+- Prefer hairline borders, 8–12px radii, restrained shadows, and explicit status chips over decorative cards.
+- Desktop workflows may use three asymmetric columns; collapse them to a single vertical flow below 1280px.
+- Preserve the existing module colors and the green global application identity.
 <!--
 
 System Guidelines

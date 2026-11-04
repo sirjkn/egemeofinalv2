@@ -11,6 +11,7 @@ import {
 import { fmtKES, fmtKESFull, fmtDate } from "@/app/shared";
 import { supabase } from "@/lib/supabase";
 import { logActivity } from "@/lib/api";
+import { OutreachEntryModal } from "@/app/components/OutreachEntryModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,13 @@ interface OutreachLog {
   projectName: string;
   siteVisitLabel: string;
   notes: string;
+  activitySubtype: string;
+  pipelineStage: string;
+  nextFollowup: string;
+  followupType: string;
+  assignedTo: string;
+  assignedToName: string;
+  sourceTag: string;
 }
 
 type PipelineStatus = "contacts" | "contacted" | "site_scheduled" | "converted" | "lost";
@@ -1348,24 +1356,18 @@ function DailyOutreachSection() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState(new Date().toISOString().slice(0, 10));
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [followupFilter, setFollowupFilter] = useState("");
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [form, setForm] = useState({
-    occurredAt: toDateTimeLocal(),
-    activityType: "Call",
-    contactId: 0,
-    outcome: "",
-    status: "Follow-up",
-    projectId: 0,
-    siteVisitId: 0,
-    notes: "",
-  });
 
   const load = () => {
     setLoading(true);
     Promise.all([
       supabase
         .from("lead_outreach_logs")
-        .select("*, contact:lead_contacts(first_name,last_name,phone), project:projects(project_name), site_visit:lead_site_visits(location,scheduled_at)")
+        .select("*, contact:lead_contacts(first_name,last_name,phone,event_id), project:projects(project_name), site_visit:lead_site_visits(location,scheduled_at)")
         .order("occurred_at", { ascending: false }),
       supabase
         .from("lead_site_visits")
@@ -1387,6 +1389,13 @@ function DailyOutreachSection() {
         projectName: row.project?.project_name ?? "",
         siteVisitLabel: row.site_visit ? `${row.site_visit.location} · ${displayDateTime(row.site_visit.scheduled_at)}` : "",
         notes: row.notes ?? "",
+        activitySubtype: row.activity_subtype ?? "",
+        pipelineStage: row.pipeline_stage ?? "",
+        nextFollowup: row.followup_at ?? "",
+        followupType: row.followup_type ?? "",
+        assignedTo: row.assigned_to ?? "",
+        assignedToName: row.assigned_to_name ?? "",
+        sourceTag: row.contact?.event_id ? "EVENT" : "LEAD",
       })));
       setSiteVisits((visitResult.data ?? []).map((row: any) => ({
         id: row.id,
@@ -1407,41 +1416,8 @@ function DailyOutreachSection() {
   useEffect(load, []);
 
   const openCreate = () => {
-    setForm({ occurredAt: toDateTimeLocal(), activityType: "Call", contactId: 0, outcome: "", status: "Follow-up", projectId: 0, siteVisitId: 0, notes: "" });
     setError("");
     setModalOpen(true);
-  };
-
-  const save = async () => {
-    if (!form.occurredAt || !form.activityType || !form.contactId || !form.outcome.trim() || !form.status) {
-      setError("Date/time, activity type, contact, outcome, and status are required.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      const { data: auth } = await supabase.auth.getUser();
-      const { error: saveError } = await supabase.from("lead_outreach_logs").insert({
-        occurred_at: new Date(form.occurredAt).toISOString(),
-        activity_type: form.activityType,
-        contact_id: form.contactId,
-        outcome: form.outcome.trim(),
-        status: form.status,
-        reported_by: reporter,
-        reported_by_user_id: auth.user?.id ?? null,
-        project_id: form.projectId || null,
-        site_visit_id: form.siteVisitId || null,
-        notes: form.notes.trim() || null,
-      });
-      if (saveError) throw saveError;
-      logActivity({ category: "other", action: "create", description: `${form.activityType} outreach logged`, actor_name: reporter });
-      setModalOpen(false);
-      load();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to save outreach log.");
-    } finally {
-      setSaving(false);
-    }
   };
 
   const remove = async (id: number) => {
@@ -1453,11 +1429,21 @@ function DailyOutreachSection() {
   const filtered = logs.filter((log) => {
     const eatDate = new Date(log.occurredAt).toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
     if (dateFilter && eatDate !== dateFilter) return false;
+    if (sourceFilter && log.sourceTag !== sourceFilter) return false;
+    if (projectFilter && log.projectName !== projectFilter) return false;
+    if (stageFilter && log.pipelineStage !== stageFilter) return false;
+    if (followupFilter) {
+      if (!log.nextFollowup) return false;
+      const followupDate = new Date(log.nextFollowup).toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+      if (followupFilter === "Due today" && followupDate !== today) return false;
+      if (followupFilter === "Overdue" && followupDate >= today) return false;
+    }
     const query = search.trim().toLowerCase();
     return !query || `${log.contactName} ${log.contactPhone} ${log.activityType} ${log.outcome} ${log.notes}`.toLowerCase().includes(query);
   });
   const calls = filtered.filter((log) => log.activityType === "Call").length;
-  const newProspects = filtered.filter((log) => log.activityType === "New Lead").length;
+  const newProspects = filtered.filter((log) => log.sourceTag === "LEAD").length;
   const visitBookings = filtered.filter((log) => log.activityType === "Site Visit").length;
   const followUps = filtered.filter((log) => log.status === "Follow-up").length;
 
@@ -1489,6 +1475,20 @@ function DailyOutreachSection() {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by contact, phone, activity or outcome…"
             className="w-full border rounded-xl pl-9 pr-3 py-2.5 text-sm bg-white" style={{ borderColor: "#e2e8f0" }} />
         </div>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <option value="">All sources</option><option>EVENT</option><option>LEAD</option>
+        </select>
+        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <option value="">All projects</option>{Array.from(new Set(logs.map((log) => log.projectName).filter(Boolean))).sort().map((project) => <option key={project}>{project}</option>)}
+        </select>
+        <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <option value="">All stages</option>{["Contacted", "Site Scheduled", "Converted", "Lost / Dead"].map((stage) => <option key={stage}>{stage}</option>)}
+        </select>
+        <select value={followupFilter} onChange={(e) => setFollowupFilter(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <option value="">All follow-ups</option><option>Due today</option><option>Overdue</option>
+        </select>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -1523,20 +1523,23 @@ function DailyOutreachSection() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead><tr className="bg-slate-50">
-                {["DATE / TIME", "ACTIVITY", "CONTACT", "PHONE", "OUTCOME", "STATUS", "PROJECT / SITE VISIT", "REPORTED BY", "ACTION"].map((heading) => (
+                {["TIME", "ACTIVITY (+ SUB)", "CONTACT (+ SOURCE)", "PHONE", "PROJECT", "STAGE", "STATUS", "OUTCOME / NEXT STEP", "NEXT FOLLOW-UP", "ASSIGNED TO", "REPORTED BY", "ACTIONS"].map((heading) => (
                   <th key={heading} className="px-3 py-3 text-left text-[10px] font-bold tracking-wide text-gray-400 whitespace-nowrap">{heading}</th>
                 ))}
               </tr></thead>
               <tbody>
                 {filtered.map((log) => (
                   <tr key={log.id} className="border-t hover:bg-violet-50/30" style={{ borderColor: "#f1f5f9" }}>
-                    <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{displayDateTime(log.occurredAt)}</td>
-                    <td className="px-3 py-3 font-semibold text-violet-700 whitespace-nowrap">{log.activityType}</td>
-                    <td className="px-3 py-3 font-semibold text-slate-800 whitespace-nowrap">{log.contactName}</td>
+                    <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{new Date(log.occurredAt).toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="px-3 py-3 font-semibold text-violet-700 whitespace-nowrap"><div>{log.activityType}</div>{log.activitySubtype && <div className="text-[9px] font-normal text-gray-400">{log.activitySubtype}</div>}</td>
+                    <td className="px-3 py-3 font-semibold text-slate-800 whitespace-nowrap"><div>{log.contactName}</div><span className="mt-1 inline-block rounded bg-blue-50 px-1.5 py-0.5 text-[8px] font-bold text-blue-700">{log.sourceTag}</span></td>
                     <td className="px-3 py-3 font-mono text-slate-500 whitespace-nowrap">{log.contactPhone}</td>
-                    <td className="px-3 py-3 text-slate-600 min-w-44">{log.outcome}</td>
+                    <td className="px-3 py-3 text-slate-500 min-w-36">{log.projectName || "General"}</td>
+                    <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{log.pipelineStage || "—"}</td>
                     <td className="px-3 py-3"><span className={`px-2 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${statusStyle(log.status)}`}>{log.status}</span></td>
-                    <td className="px-3 py-3 text-slate-500 min-w-44">{log.siteVisitLabel || log.projectName || "—"}</td>
+                    <td className="px-3 py-3 text-slate-600 min-w-48">{log.outcome}</td>
+                    <td className="px-3 py-3 text-slate-500 min-w-40">{log.nextFollowup ? <><div>{displayDateTime(log.nextFollowup)}</div><div className="text-[9px] text-amber-600">{log.followupType}</div></> : "—"}</td>
+                    <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{log.assignedToName || (log.assignedTo ? "Assigned user" : "—")}</td>
                     <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{log.reportedBy}</td>
                     <td className="px-3 py-3"><button onClick={() => setDeleteId(log.id)} className="p-1.5 rounded hover:bg-red-50"><Trash2 size={13} className="text-red-500" /></button></td>
                   </tr>
@@ -1547,89 +1550,7 @@ function DailyOutreachSection() {
         )}
       </div>
 
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b flex items-center justify-between bg-violet-50 border-violet-100">
-              <div>
-                <h3 className="font-bold text-lg text-slate-900">New Log Entry</h3>
-                <p className="text-xs text-gray-500">Record your daily activity and customer interaction.</p>
-              </div>
-              <button onClick={() => setModalOpen(false)} className="p-1.5 rounded-lg hover:bg-violet-100"><X size={17} /></button>
-            </div>
-            <div className="p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-4">
-              {error && <div className="md:col-span-2 px-3 py-2 rounded-lg bg-red-50 text-xs text-red-600">{error}</div>}
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Date / Time *</label>
-                <input type="datetime-local" value={form.occurredAt} onChange={(e) => setForm((current) => ({ ...current, occurredAt: e.target.value }))}
-                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Activity Type *</label>
-                <select value={form.activityType} onChange={(e) => setForm((current) => ({ ...current, activityType: e.target.value }))}
-                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
-                  {["Call", "New Lead", "Follow-up", "Site Visit", "Email", "Meeting", "WhatsApp"].map((value) => <option key={value}>{value}</option>)}
-                </select>
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Contact / Prospect *</label>
-                <select value={form.contactId} onChange={(e) => setForm((current) => ({ ...current, contactId: Number(e.target.value) }))}
-                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
-                  <option value={0}>Select from available contacts</option>
-                  {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name} — {contact.phone}</option>)}
-                </select>
-                {contacts.length === 0 && <p className="text-[10px] text-amber-600 mt-1">Add contacts in the Leads submenu first.</p>}
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Outcome / Next Step *</label>
-                <input value={form.outcome} onChange={(e) => setForm((current) => ({ ...current, outcome: e.target.value }))}
-                  placeholder="e.g. Interested, follow-up required, site visit booked…" className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }} />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Status *</label>
-                <select value={form.status} onChange={(e) => setForm((current) => ({ ...current, status: e.target.value }))}
-                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
-                  {["New", "Follow-up", "Site Visit", "Confirmed", "Converted", "Not Interested"].map((value) => <option key={value}>{value}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Project (optional)</label>
-                <select value={form.projectId} onChange={(e) => setForm((current) => ({ ...current, projectId: Number(e.target.value) }))}
-                  className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "#e2e8f0" }}>
-                  <option value={0}>Select project</option>
-                  {projects.map((project) => <option key={project.id} value={project.id}>{project.name} — {project.location}</option>)}
-                </select>
-              </div>
-              <div className="md:col-span-2 rounded-xl border p-4 bg-violet-50/60" style={{ borderColor: "#ddd6fe" }}>
-                <label className="block text-xs font-bold text-violet-700 mb-1">Site Visit Details (optional)</label>
-                <select value={form.siteVisitId} onChange={(e) => {
-                  const siteVisitId = Number(e.target.value);
-                  const visit = siteVisits.find((item) => item.id === siteVisitId);
-                  setForm((current) => ({ ...current, siteVisitId, projectId: visit?.projectId ?? current.projectId }));
-                }} className="w-full border rounded-xl px-3 py-2.5 text-sm bg-white" style={{ borderColor: "#ddd6fe" }}>
-                  <option value={0}>Select a visit from the Site Visits submenu</option>
-                  {siteVisits.map((visit) => <option key={visit.id} value={visit.id}>{visit.location} — {displayDateTime(visit.scheduledAt)}</option>)}
-                </select>
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Details / Notes</label>
-                <textarea value={form.notes} onChange={(e) => setForm((current) => ({ ...current, notes: e.target.value }))}
-                  rows={3} placeholder="Add detailed notes about the interaction…" className="w-full border rounded-xl px-3 py-2.5 text-sm resize-none" style={{ borderColor: "#e2e8f0" }} />
-              </div>
-              <div className="md:col-span-2 rounded-xl bg-slate-50 px-3 py-2.5">
-                <span className="text-[10px] uppercase font-bold text-gray-400">Reported By</span>
-                <p className="text-sm font-semibold text-slate-700">{reporter}</p>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-2" style={{ borderColor: "#e2e8f0" }}>
-              <button onClick={() => setModalOpen(false)} className="px-4 py-2.5 rounded-xl border text-sm font-semibold text-gray-500" style={{ borderColor: "#e2e8f0" }}>Cancel</button>
-              <button onClick={save} disabled={saving} className="px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-violet-600 disabled:opacity-50 flex items-center gap-2">
-                {saving && <Loader2 size={13} className="animate-spin" />} Save Entry
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modalOpen && <OutreachEntryModal projects={projects} reporter={reporter} onClose={() => setModalOpen(false)} onSaved={(keepOpen) => { logActivity({ category: "other", action: "create", description: "Outreach log created", actor_name: reporter }); load(); if (!keepOpen) setModalOpen(false); }} />}
 
       {deleteId !== null && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">

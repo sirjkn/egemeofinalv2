@@ -54,3 +54,32 @@ create policy "Authenticated users manage outreach logs"
   to authenticated
   using (true)
   with check (true);
+
+-- Expanded outreach workflow fields (safe to run more than once)
+alter table public.lead_site_visits add column if not exists contact_id bigint references public.lead_contacts(id) on delete set null;
+alter table public.lead_site_visits add column if not exists visitors_count integer;
+alter table public.lead_site_visits add column if not exists transport text;
+alter table public.lead_site_visits add column if not exists pickup_point text;
+alter table public.lead_site_visits add column if not exists visit_outcome text;
+
+alter table public.lead_outreach_logs add column if not exists activity_subtype text;
+alter table public.lead_outreach_logs add column if not exists activity_purpose text;
+alter table public.lead_outreach_logs add column if not exists contact_type text;
+alter table public.lead_outreach_logs add column if not exists pipeline_stage text;
+alter table public.lead_outreach_logs add column if not exists plot_reference text;
+alter table public.lead_outreach_logs add column if not exists budget_range text;
+alter table public.lead_outreach_logs add column if not exists payment_preference text;
+alter table public.lead_outreach_logs add column if not exists lost_reason text;
+alter table public.lead_outreach_logs add column if not exists followup_at timestamptz;
+alter table public.lead_outreach_logs add column if not exists followup_type text;
+alter table public.lead_outreach_logs add column if not exists assigned_to uuid references auth.users(id) on delete set null;
+alter table public.lead_outreach_logs add column if not exists assigned_to_name text;
+alter table public.lead_outreach_logs add column if not exists priority text;
+alter table public.lead_outreach_logs add column if not exists remind_via text[] not null default '{}';
+alter table public.lead_outreach_logs add column if not exists reminder_status text;
+alter table public.lead_outreach_logs add column if not exists linked_log_id bigint references public.lead_outreach_logs(id) on delete set null;
+alter table public.lead_outreach_logs add column if not exists metadata jsonb not null default '{}'::jsonb;
+
+create index if not exists lead_outreach_logs_followup_at_idx
+  on public.lead_outreach_logs (followup_at)
+  where reminder_status = 'open';
