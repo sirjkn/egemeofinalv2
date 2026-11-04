@@ -2752,10 +2752,12 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     id: number;
     memberNumber: number;
     name: string;
+    status: string;
     contribution: number;
     profits: Record<number, number>;
   }>>([]);
   const [shareholderReportProjectFilter, setShareholderReportProjectFilter] = useState<"all" | number>("all");
+  const [shareholderReportStatusFilter, setShareholderReportStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [shareholderReportSort, setShareholderReportSort] = useState<
     "member-asc" | "member-desc" | "name-asc" | "name-desc" | "contribution-desc" | "contribution-asc" | "profit-desc" | "profit-asc" | "grand-desc" | "grand-asc"
   >("member-asc");
@@ -2926,7 +2928,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
       // Shareholder contribution + per-project profit report.
       const [reportShareholders, reportProjects, reportDistributions, reportContributions] = await Promise.all([
-        supabase.from("shareholders").select("id, member_number, name, net_savings").order("member_number", { ascending: true }),
+        supabase.from("shareholders").select("id, member_number, name, status, net_savings").order("member_number", { ascending: true }),
         supabase.from("projects").select("id, project_name, date_completed"),
         supabase.from("profit_distributions").select("shareholder_id, project_id, amount").not("shareholder_id", "is", null),
         supabase.from("contributions").select("shareholder_id, amount"),
@@ -2952,6 +2954,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         id: Number(row.id),
         memberNumber: Number(row.member_number ?? 0),
         name: row.name ?? "Unnamed Shareholder",
+        status: row.status ?? "Active",
         contribution: row.net_savings != null
           ? Math.max(0, Number(row.net_savings))
           : (contributionByShareholder[Number(row.id)] ?? 0),
@@ -3011,7 +3014,10 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     : shareholderReportProjects.filter((project) => project.id === shareholderReportProjectFilter);
   const profitForVisibleProjects = (row: typeof shareholderReport[number]) =>
     visibleReportProjects.reduce((sum, project) => sum + (row.profits[project.id] ?? 0), 0);
-  const visibleShareholderReport = [...shareholderReport].sort((a, b) => {
+  const visibleShareholderReport = shareholderReport.filter((row) => {
+    if (shareholderReportStatusFilter === "all") return true;
+    return row.status.toLowerCase() === shareholderReportStatusFilter;
+  }).sort((a, b) => {
     const aProfit = profitForVisibleProjects(a);
     const bProfit = profitForVisibleProjects(b);
     switch (shareholderReportSort) {
@@ -3132,7 +3138,8 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     const projectSuffix = shareholderReportProjectFilter === "all"
       ? "all-projects"
       : visibleReportProjects[0]?.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "project";
-    doc.save(`shareholders-profit-report-${projectSuffix}-${new Date().toISOString().slice(0, 10)}.pdf`);
+    const statusSuffix = shareholderReportStatusFilter === "all" ? "all-shareholders" : `${shareholderReportStatusFilter}-shareholders`;
+    doc.save(`shareholders-profit-report-${projectSuffix}-${statusSuffix}-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   return (
@@ -3399,6 +3406,19 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 ))}
               </select>
             </div>
+            <div className="min-w-[170px]">
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Shareholder Status</label>
+              <select
+                value={shareholderReportStatusFilter}
+                onChange={(e) => setShareholderReportStatusFilter(e.target.value as "all" | "active" | "inactive")}
+                className="w-full border rounded-lg px-3 py-2 text-xs font-semibold bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                style={{ borderColor: "#cbd5e1" }}
+              >
+                <option value="all">All Shareholders</option>
+                <option value="active">Active Shareholders</option>
+                <option value="inactive">Inactive Shareholders</option>
+              </select>
+            </div>
             <div className="min-w-[210px]">
               <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Sort By</label>
               <select
@@ -3419,10 +3439,11 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 <option value="grand-asc">Grand Total — Lowest First</option>
               </select>
             </div>
-            {(shareholderReportProjectFilter !== "all" || shareholderReportSort !== "member-asc") && (
+            {(shareholderReportProjectFilter !== "all" || shareholderReportStatusFilter !== "all" || shareholderReportSort !== "member-asc") && (
               <button
                 onClick={() => {
                   setShareholderReportProjectFilter("all");
+                  setShareholderReportStatusFilter("all");
                   setShareholderReportSort("member-asc");
                 }}
                 className="px-3 py-2 rounded-lg border text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100"
