@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   BarChart2, Link2, CreditCard, RotateCcw, Users, UserCircle2,
-  Filter, Search, ChevronRight, ArrowLeft, FileDown, Loader2, TrendingUp,
+  Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp,
 } from "lucide-react";
 import {
   contributionsApi, paymentsApi, shareholdersApi, clientsApi, refundsApi,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/pdf";
 import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
+import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 
 type ReportSub = "contributions" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits";
 
@@ -359,6 +360,49 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         ], `Annual Summary Report${yearF !== "all" ? ` ${yearF}` : ""}`, co, filterStr);
       }
     } finally { setDownloading(false); }
+  };
+
+  const handleExcel = () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (type === "contributions") {
+      downloadExcel(`contributions-report-${stamp}`, "Contributions",
+        ["Member", "Member No.", "Month", "Year", "Date Paid", "Amount", "Status", "Notes"],
+        filtered.map((c: any) => [c.shareholder?.name ?? "—", `EW#${c.shareholder?.member_number ?? "—"}`, MONTHS[c.month - 1], c.year, c.payment_date ? fmtDate(c.payment_date) : "—", Number(c.amount), c.status, c.notes ?? "—"]));
+    } else if (type === "payments") {
+      downloadExcel(`payments-report-${stamp}`, "Payments",
+        ["Payment ID", "Date Paid", "Amount", "Paid By", "Purpose", "Mode", "Comment"],
+        filtered.map((p: any) => [p.payment_id ?? "—", fmtDate(p.date_paid), Number(p.amount), p.paid_by, p.purpose, p.mode, p.comment ?? "—"]));
+    } else if (type === "refunds") {
+      downloadExcel(`refunds-report-${stamp}`, "Refunds",
+        ["Member", "Member No.", "Amount", "Refund Date", "Notes"],
+        filtered.map((r: any) => [r.shareholder?.name ?? "Unknown", `EW#${r.shareholder?.member_number ?? "—"}`, Number(r.amount), fmtDate(r.refund_date), r.notes ?? "—"]));
+    } else if (type === "shareholders" || type === "clients") {
+      downloadExcel(`${type}-report-${stamp}`, type === "shareholders" ? "Shareholders" : "Clients",
+        ["Member No.", "Name", "Phone", "Email", "Joined", "Status", ...(type === "shareholders" ? ["Net Savings"] : [])],
+        filtered.map((member: any) => [member.member_number, member.name, member.phone, member.email, fmtDate(member.joined_date), member.status, ...(type === "shareholders" ? [Number(member.net_savings ?? 0)] : [])]));
+    } else if (type === "profits") {
+      downloadExcel(`profit-distributions-${stamp}`, "Profit Distributions",
+        ["Member", "Member No.", "Type", "Project", "Date", "Amount", "Notes"],
+        filtered.map((r: any) => {
+          const isInvestor = !!r.investor_id;
+          return [
+            isInvestor ? r.investor?.name ?? "—" : r.shareholder?.name ?? "—",
+            `EW#${isInvestor ? r.investor?.member_number ?? "—" : r.shareholder?.member_number ?? "—"}`,
+            isInvestor ? "Investor" : "Shareholder", r.project?.project_name ?? "—",
+            fmtDate(r.distributed_at?.slice(0, 10)), Number(r.amount), r.notes ?? "—",
+          ];
+        }));
+    } else if (type === "summary" && rows[0]) {
+      const { sh, cl, contribRes, payRes } = rows[0];
+      downloadExcelWorkbook(`annual-summary-${yearF === "all" ? "all-years" : yearF}-${stamp}`, [
+        { name: "Membership", headers: ["Category", "Total", "Active", "Inactive"], rows: [
+          ["Shareholders", sh.length, sh.filter((s: any) => s.status === "Active").length, sh.filter((s: any) => s.status !== "Active").length],
+          ["Clients", cl.length, cl.filter((c: any) => c.status === "Active").length, cl.filter((c: any) => c.status !== "Active").length],
+        ] },
+        { name: "Contributions", headers: ["Member", "Member No.", "Total", "Payments"], rows: contribRes.map((s: any) => [s.shareholder.name, `EW#${s.shareholder.member_number}`, Number(s.total), s.count]) },
+        { name: "Payments", headers: ["Paid By", "Purpose", "Mode", "Amount"], rows: payRes.map((p: any) => [p.paid_by, p.purpose, p.mode, Number(p.amount)]) },
+      ]);
+    }
   };
 
   // ── filter bar ───────────────────────────────────────────────────────────
@@ -839,12 +883,18 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         <p className="text-xs text-gray-400">
           {recordCount !== null ? `${recordCount} record${recordCount !== 1 ? "s" : ""} shown` : "Summary report"}
         </p>
-        <button onClick={handlePdf} disabled={downloading}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
-          style={{ background: meta.color }}>
-          {downloading ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
-          {downloading ? "Generating PDF…" : "Download PDF"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleExcel}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-emerald-700 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors">
+            <FileSpreadsheet size={15} /> Download Excel
+          </button>
+          <button onClick={handlePdf} disabled={downloading}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
+            style={{ background: meta.color }}>
+            {downloading ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
+            {downloading ? "Generating PDF…" : "Download PDF"}
+          </button>
+        </div>
       </div>
     </div>
   );

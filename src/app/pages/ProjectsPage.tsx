@@ -5,7 +5,7 @@ import {
   Users, ChevronDown, Loader2, Wallet, UploadCloud,
   RotateCcw, AlertCircle, RefreshCw, Edit2, Trash2,
   UserPlus, TrendingUp, History, CircleDollarSign, UserCircle2, CheckCircle2,
-  FileText, Download, Eye, FileDown, List,
+  FileText, Download, Eye, FileDown, FileSpreadsheet, List,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
@@ -20,6 +20,7 @@ import { getPaymentSettings } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
 import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
 import { downloadPlotPaymentHistoryPdf } from "@/lib/pdf";
+import { downloadExcel } from "@/lib/excel";
 import { getCompanyDetails } from "@/lib/company";
 
 // ─── Shared Confirm Modal ────────────────────────────────────────────────────
@@ -1330,7 +1331,28 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                   ) : (
                     <>
                       {/* Export PDF toolbar */}
-                      <div className="flex justify-end px-3 py-1.5" style={{ borderBottom: "1px solid #e2e8f0" }}>
+                      <div className="flex justify-end gap-2 px-3 py-1.5" style={{ borderBottom: "1px solid #e2e8f0" }}>
+                        <button
+                          onClick={() => downloadExcel(
+                            `plot-${plot.plot_number}-payments-${new Date().toISOString().slice(0, 10)}`,
+                            "Plot Payments",
+                            ["Date", "Amount", "Payment Method", "Paid By", "Phone", "Comments"],
+                            payments.map((payment) => {
+                              let method = "—", note = payment.notes || "—", paidBy = "—", phone = "—";
+                              try {
+                                const parsed = JSON.parse(payment.notes ?? "");
+                                if (parsed && typeof parsed === "object") {
+                                  method = parsed.method || "—"; note = parsed.note || "—";
+                                  paidBy = parsed.paidBy || "—"; phone = parsed.phone || "—";
+                                }
+                              } catch { /* legacy text note */ }
+                              return [fmtDateTime(payment.payment_date || payment.created_at), Number(payment.amount), method, paidBy, phone, note];
+                            }),
+                          )}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold hover:opacity-80"
+                          style={{ background: "#ecfdf5", color: "#047857", border: "1px solid #a7f3d0" }}>
+                          <FileSpreadsheet size={12} /> Export Excel
+                        </button>
                         <button
                           onClick={async () => {
                             const co = await getCompanyDetails();

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  AlertCircle, Loader2, FileDown, Filter, CheckCircle, X,
+  AlertCircle, Loader2, FileDown, FileSpreadsheet, Filter, CheckCircle, X,
   RefreshCw, TrendingUp, Layers, ChevronDown,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -8,6 +8,7 @@ import { getCompanyDetails } from "@/lib/company";
 import { MONTHS, fmtKES } from "@/app/shared";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { downloadExcel } from "@/lib/excel";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -287,6 +288,17 @@ export function FinesPage() {
             style={{ borderColor: "var(--border)", color: "#64748b" }}>
             <RefreshCw size={13} />
             <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <button
+            onClick={() => downloadExcel(
+              `fines-report-${new Date().toISOString().slice(0, 10)}`, "Fines & Penalties",
+              ["Type", "Member", "No.", "Member Type", "Period / Plot", "Project", "Fine", "Status", "Date"],
+              rows.map((r) => [r.type === "contribution" ? "Contribution" : "Plot Payment", r.member_name, r.member_number, r.member_type, r.period, r.project || "—", r.fine_amount, r.fine_status, fmtDate(r.record_date)]),
+            )}
+            disabled={rows.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-emerald-700 border border-emerald-200 bg-emerald-50 disabled:opacity-50 hover:bg-emerald-100 transition-colors">
+            <FileSpreadsheet size={13} />
+            <span className="hidden sm:inline">Export Excel</span>
           </button>
           <button
             onClick={() => downloadFinesPdf(rows, filtersLabel)}

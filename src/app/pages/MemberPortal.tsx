@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  LogOut, User, TrendingUp, Wallet, BarChart2, Download,
+  LogOut, User, TrendingUp, Wallet, BarChart2, Download, FileSpreadsheet,
   ChevronRight, Loader2, Home, FileText, Building2, CreditCard,
   CircleDollarSign, Calendar, CheckCircle2, Clock, X, ArrowLeft,
 } from "lucide-react";
@@ -9,6 +9,7 @@ import { shareholdersApi, clientsApi, investorsApi, contributionsApi } from "@/l
 import { fmtKESFull, fmtDate, MONTHS, initials } from "@/app/shared";
 import { downloadContributionsPdf, downloadReportPdf } from "@/lib/pdf";
 import { getCompanyDetails } from "@/lib/company";
+import { downloadExcel } from "@/lib/excel";
 import type { UserProfile } from "@/app/pages/AuthPage";
 
 // ─── Shared portal shell ──────────────────────────────────────────────────────
@@ -217,11 +218,21 @@ export function ShareholderPortal({ profile, onLogout }: { profile: UserProfile;
                 </div>
               </SectionCard>
 
-              <button onClick={downloadStatement}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-bold text-white"
-                style={{ background: "#4f46e5" }}>
-                <Download size={15} /> Download Statement (PDF)
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => downloadExcel(
+                  `statement-EW${member?.member_number}-${new Date().toISOString().slice(0, 10)}`, "Contributions",
+                  ["Month", "Year", "Date Paid", "Amount", "Status", "Notes"],
+                  contributions.map((c) => [MONTHS[c.month - 1], c.year, c.payment_date ? fmtDate(c.payment_date) : "—", Number(c.amount), c.status, c.notes ?? "—"]),
+                )}
+                  className="flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-bold text-emerald-700 border border-emerald-200 bg-emerald-50">
+                  <FileSpreadsheet size={15} /> Excel
+                </button>
+                <button onClick={downloadStatement}
+                  className="flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-bold text-white"
+                  style={{ background: "#4f46e5" }}>
+                  <Download size={15} /> PDF
+                </button>
+              </div>
             </>
           )}
 

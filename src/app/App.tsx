@@ -39,6 +39,7 @@ import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, f
 import { sendSms, smsTemplates, SMS_TRIGGERS, loadSmsSettingsFromSupabase } from "@/lib/sms";
 import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings, loadPaymentSettingsFromSupabase, loadDarajaConfigFromSupabase } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
+import { downloadExcel } from "@/lib/excel";
 import { toast, Toaster } from "sonner";
 import { LoginPage, SetPasswordPage, fetchProfile, type UserProfile, phoneToEmail } from "@/app/pages/AuthPage";
 import { ImpersonationCtx, useImpersonation } from "@/lib/impersonation";
@@ -614,7 +615,21 @@ function ShareholderContributionsAccordion({ shareholder, onChanged }: {
       ) : (
         <>
           {/* Export PDF toolbar */}
-          <div className="flex justify-end mb-2 -mt-1">
+          <div className="flex justify-end gap-2 mb-2 -mt-1">
+            <button
+              onClick={() => downloadExcel(
+                `contributions-EW${shareholder.member_number}-${new Date().toISOString().slice(0, 10)}`,
+                "Contributions",
+                ["Month", "Date Paid", "Amount", "Payment Method", "Status", "Comments"],
+                contribs.slice().sort((a, b) => b.year - a.year || b.month - a.month).map((c) => [
+                  `${MONTHS[c.month - 1]} ${c.year}`, c.payment_date ? fmtDate(c.payment_date) : "",
+                  Number(c.amount), parseContribMethod(c.notes), c.status === "late" ? "Late" : "On time", parseContribComment(c.notes),
+                ]),
+              )}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold hover:opacity-80"
+              style={{ background: "#ecfdf5", color: "#047857", border: "1px solid #a7f3d0" }}>
+              <FileSpreadsheet size={12} /> Export Excel
+            </button>
             <button
               onClick={async () => {
                 const co = await getCompanyDetails();
@@ -2755,9 +2770,13 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     status: string;
     contribution: number;
     profits: Record<number, number>;
+    contributionEntries: Array<{ month: number; year: number; amount: number }>;
+    profitEntries: Array<{ projectId: number; distributedAt: string; amount: number }>;
   }>>([]);
   const [shareholderReportProjectFilter, setShareholderReportProjectFilter] = useState<"all" | number>("all");
   const [shareholderReportStatusFilter, setShareholderReportStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [shareholderReportYearFilter, setShareholderReportYearFilter] = useState<"all" | number>("all");
+  const [shareholderReportMonthFilter, setShareholderReportMonthFilter] = useState<"all" | number>("all");
   const [shareholderReportSort, setShareholderReportSort] = useState<
     "member-asc" | "member-desc" | "name-asc" | "name-desc" | "contribution-desc" | "contribution-asc" | "profit-desc" | "profit-asc" | "grand-desc" | "grand-asc"
   >("member-asc");
@@ -2930,8 +2949,8 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       const [reportShareholders, reportProjects, reportDistributions, reportContributions] = await Promise.all([
         supabase.from("shareholders").select("id, member_number, name, status, net_savings").order("member_number", { ascending: true }),
         supabase.from("projects").select("id, project_name, date_completed"),
-        supabase.from("profit_distributions").select("shareholder_id, project_id, amount").not("shareholder_id", "is", null),
-        supabase.from("contributions").select("shareholder_id, amount"),
+        supabase.from("profit_distributions").select("shareholder_id, project_id, amount, distributed_at").not("shareholder_id", "is", null),
+        supabase.from("contributions").select("shareholder_id, amount, month, year"),
       ]);
       const orderedProjects = (reportProjects.data ?? [])
         .map((row: any) => ({ id: Number(row.id), name: row.project_name ?? `Project ${row.id}` }))
@@ -2949,6 +2968,26 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         profitByShareholder[shareholderId][projectId] =
           (profitByShareholder[shareholderId][projectId] ?? 0) + Number(distribution.amount);
       }
+      const contributionEntriesByShareholder: Record<number, Array<{ month: number; year: number; amount: number }>> = {};
+      for (const contribution of reportContributions.data ?? []) {
+        const shareholderId = Number(contribution.shareholder_id);
+        if (!contributionEntriesByShareholder[shareholderId]) contributionEntriesByShareholder[shareholderId] = [];
+        contributionEntriesByShareholder[shareholderId].push({
+          month: Number(contribution.month),
+          year: Number(contribution.year),
+          amount: Number(contribution.amount),
+        });
+      }
+      const profitEntriesByShareholder: Record<number, Array<{ projectId: number; distributedAt: string; amount: number }>> = {};
+      for (const distribution of reportDistributions.data ?? []) {
+        const shareholderId = Number(distribution.shareholder_id);
+        if (!profitEntriesByShareholder[shareholderId]) profitEntriesByShareholder[shareholderId] = [];
+        profitEntriesByShareholder[shareholderId].push({
+          projectId: Number(distribution.project_id),
+          distributedAt: distribution.distributed_at ?? "",
+          amount: Number(distribution.amount),
+        });
+      }
       setShareholderReportProjects(orderedProjects);
       const reportRows = (reportShareholders.data ?? []).map((row: any) => ({
         id: Number(row.id),
@@ -2959,6 +2998,8 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
           ? Math.max(0, Number(row.net_savings))
           : (contributionByShareholder[Number(row.id)] ?? 0),
         profits: profitByShareholder[Number(row.id)] ?? {},
+        contributionEntries: contributionEntriesByShareholder[Number(row.id)] ?? [],
+        profitEntries: profitEntriesByShareholder[Number(row.id)] ?? [],
       })).sort((a, b) => a.memberNumber - b.memberNumber || a.name.localeCompare(b.name));
       setShareholderReport(reportRows);
 
@@ -3009,12 +3050,27 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     0,
   );
   const reportGrandTotal = reportContributionTotal + reportProfitTotal;
+  const periodShareholderReport = shareholderReport.map((row) => {
+    if (shareholderReportYearFilter === "all") return row;
+    const contribution = row.contributionEntries
+      .filter((entry) => entry.year === shareholderReportYearFilter && (shareholderReportMonthFilter === "all" || entry.month === shareholderReportMonthFilter))
+      .reduce((sum, entry) => sum + entry.amount, 0);
+    const profits: Record<number, number> = {};
+    row.profitEntries.forEach((entry) => {
+      if (!entry.distributedAt) return;
+      const date = new Date(entry.distributedAt);
+      if (date.getFullYear() !== shareholderReportYearFilter) return;
+      if (shareholderReportMonthFilter !== "all" && date.getMonth() + 1 !== shareholderReportMonthFilter) return;
+      profits[entry.projectId] = (profits[entry.projectId] ?? 0) + entry.amount;
+    });
+    return { ...row, contribution, profits };
+  });
   const visibleReportProjects = shareholderReportProjectFilter === "all"
     ? shareholderReportProjects
     : shareholderReportProjects.filter((project) => project.id === shareholderReportProjectFilter);
   const profitForVisibleProjects = (row: typeof shareholderReport[number]) =>
     visibleReportProjects.reduce((sum, project) => sum + (row.profits[project.id] ?? 0), 0);
-  const visibleShareholderReport = shareholderReport.filter((row) => {
+  const visibleShareholderReport = periodShareholderReport.filter((row) => {
     if (shareholderReportStatusFilter === "all") return true;
     return row.status.toLowerCase() === shareholderReportStatusFilter;
   }).sort((a, b) => {
@@ -3140,6 +3196,22 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       : visibleReportProjects[0]?.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "project";
     const statusSuffix = shareholderReportStatusFilter === "all" ? "all-shareholders" : `${shareholderReportStatusFilter}-shareholders`;
     doc.save(`shareholders-profit-report-${projectSuffix}-${statusSuffix}-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+  const exportShareholderReportExcel = () => {
+    if (visibleShareholderReport.length === 0) return;
+    const headers = ["Shareholder No.", "Name", "Status", "Contribution", ...visibleReportProjects.map((project) => `${project.name} Profit`), "Total Profit", "Grand Total"];
+    const rows = visibleShareholderReport.map((shareholder) => {
+      const totalProfit = profitForVisibleProjects(shareholder);
+      return [
+        shareholder.memberNumber, shareholder.name, shareholder.status, shareholder.contribution,
+        ...visibleReportProjects.map((project) => shareholder.profits[project.id] ?? 0),
+        totalProfit, shareholder.contribution + totalProfit,
+      ];
+    });
+    const period = shareholderReportYearFilter === "all"
+      ? "all-dates"
+      : `${shareholderReportYearFilter}-${shareholderReportMonthFilter === "all" ? "all-months" : String(shareholderReportMonthFilter).padStart(2, "0")}`;
+    downloadExcel(`shareholders-report-${period}-${new Date().toISOString().slice(0, 10)}`, "Shareholders Report", headers, rows);
   };
 
   return (
@@ -3389,6 +3461,13 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
               >
                 <FileDown size={12} /> Export PDF
               </button>
+              <button
+                onClick={exportShareholderReportExcel}
+                disabled={visibleShareholderReport.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+              >
+                <FileSpreadsheet size={12} /> Export Excel
+              </button>
             </div>
           </div>
           <div className="px-4 py-3 border-b bg-slate-50 flex flex-wrap items-end gap-3" style={{ borderColor: "var(--border)" }}>
@@ -3419,6 +3498,35 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 <option value="inactive">Inactive Shareholders</option>
               </select>
             </div>
+            <div className="min-w-[130px]">
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Year</label>
+              <select
+                value={shareholderReportYearFilter}
+                onChange={(e) => {
+                  const next = e.target.value === "all" ? "all" : Number(e.target.value);
+                  setShareholderReportYearFilter(next);
+                  if (next === "all") setShareholderReportMonthFilter("all");
+                }}
+                className="w-full border rounded-lg px-3 py-2 text-xs font-semibold bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                style={{ borderColor: "#cbd5e1" }}
+              >
+                <option value="all">All Years</option>
+                {YEAR_OPTS.map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+            </div>
+            <div className="min-w-[150px]">
+              <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Month</label>
+              <select
+                value={shareholderReportMonthFilter}
+                disabled={shareholderReportYearFilter === "all"}
+                onChange={(e) => setShareholderReportMonthFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
+                className="w-full border rounded-lg px-3 py-2 text-xs font-semibold bg-white text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                style={{ borderColor: "#cbd5e1" }}
+              >
+                <option value="all">All Months</option>
+                {MONTHS.map((month, index) => <option key={month} value={index + 1}>{month}</option>)}
+              </select>
+            </div>
             <div className="min-w-[210px]">
               <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-1">Sort By</label>
               <select
@@ -3439,11 +3547,13 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 <option value="grand-asc">Grand Total — Lowest First</option>
               </select>
             </div>
-            {(shareholderReportProjectFilter !== "all" || shareholderReportStatusFilter !== "all" || shareholderReportSort !== "member-asc") && (
+            {(shareholderReportProjectFilter !== "all" || shareholderReportStatusFilter !== "all" || shareholderReportYearFilter !== "all" || shareholderReportMonthFilter !== "all" || shareholderReportSort !== "member-asc") && (
               <button
                 onClick={() => {
                   setShareholderReportProjectFilter("all");
                   setShareholderReportStatusFilter("all");
+                  setShareholderReportYearFilter("all");
+                  setShareholderReportMonthFilter("all");
                   setShareholderReportSort("member-asc");
                 }}
                 className="px-3 py-2 rounded-lg border text-[10px] font-bold text-slate-600 bg-white hover:bg-slate-100"
@@ -4700,6 +4810,17 @@ function PlotPaymentsInline({ plotId, refreshKey, plotNumber, projectName, membe
       setExporting(false);
     }
   };
+  const handleExportExcel = () => {
+    downloadExcel(
+      `Plot-${plotNumber ?? plotId}-Statement-${new Date().toISOString().slice(0, 10)}`,
+      "Plot Payments",
+      ["Date", "Amount", "Payment Method", "Transaction Code", "Paid By", "Phone", "Notes"],
+      payments.map((payment) => {
+        const details = parsePlotPaymentNotes(payment.notes);
+        return [fmtDateTime(payment.payment_date || payment.created_at), Number(payment.amount), details.method, details.ref, details.paidBy, details.phone, details.note];
+      }),
+    );
+  };
 
   if (loading) return (
     <div className="flex justify-center py-5 border-t" style={{ borderColor: "var(--border)" }}>
@@ -4720,6 +4841,12 @@ function PlotPaymentsInline({ plotId, refreshKey, plotNumber, projectName, membe
       {/* PDF Export bar */}
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ background: "#f8fafc", borderColor: "#e2e8f0" }}>
         <p className="text-[11px] text-gray-400 font-medium">{payments.length} payment{payments.length !== 1 ? "s" : ""}</p>
+        <div className="flex items-center gap-2">
+        <button onClick={handleExportExcel}
+          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors hover:bg-emerald-50"
+          style={{ color: "#047857", borderColor: "#a7f3d0", background: "#fff" }}>
+          <FileSpreadsheet size={13} /> Export Excel
+        </button>
         <button
           onClick={handleExportPdf}
           disabled={exporting}
@@ -4729,6 +4856,7 @@ function PlotPaymentsInline({ plotId, refreshKey, plotNumber, projectName, membe
             ? <><Loader2 size={12} className="animate-spin" /> Exporting…</>
             : <><FileDown size={13} /> Export PDF</>}
         </button>
+        </div>
       </div>
 
       {/* Table header — dark like admin */}
@@ -5074,6 +5202,15 @@ function RefundsPage() {
             <h1 className="text-lg font-bold text-white">Refunds</h1>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => downloadExcel(
+              `refunds-${new Date().toISOString().slice(0, 10)}`, "Refunds",
+              ["Member", "Member No.", "Amount", "Refund Date", "Notes"],
+              filtered.map((r) => [r.shareholder?.name ?? "Unknown", `EW#${r.shareholder?.member_number ?? "—"}`, Number(r.amount), fmtDate(r.refund_date), r.notes ?? "—"]),
+            )}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold hover:opacity-90"
+              style={{ background: "rgba(255,255,255,0.15)", color: "#a7f3d0" }}>
+              <FileSpreadsheet size={13} /> Excel
+            </button>
             <button onClick={async () => {
               const co = await getCompanyDetails();
               downloadRefundsPdf(
@@ -5467,8 +5604,24 @@ function MpesaTransactionsPage() {
           </div>
           <div className="flex items-center gap-2">
             {tab === "local" && localFiltered.length > 0 && (
+              <button onClick={() => downloadExcel(`mpesa-recorded-${new Date().toISOString().slice(0, 10)}`, "Recorded M-Pesa",
+                ["Payment ID", "Date", "Amount", "Paid By", "Purpose", "Mode", "Comment"],
+                localFiltered.map((p) => [p.payment_id ?? "—", fmtDate(p.date_paid), Number(p.amount), p.paid_by ?? "—", p.purpose ?? "—", p.mode ?? "Mpesa", p.comment ?? ""]))}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold hover:opacity-90" style={{ background: "rgba(255,255,255,0.15)", color: "#a7f3d0" }}>
+                <FileSpreadsheet size={13} /> Excel
+              </button>
+            )}
+            {tab === "local" && localFiltered.length > 0 && (
               <button onClick={exportLocalPdf} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold hover:opacity-90" style={{ background: "rgba(255,255,255,0.15)", color: "#bae6fd" }}>
                 <FileDown size={13} /> PDF
+              </button>
+            )}
+            {tab === "safaricom" && pulled && sfFiltered.length > 0 && (
+              <button onClick={() => downloadExcel(`mpesa-safaricom-${new Date().toISOString().slice(0, 10)}`, "Safaricom M-Pesa",
+                ["Date & Time", "Sender", "Phone", "Account Ref", "Amount", "Status"],
+                sfFiltered.map((t) => [t.trxDate ?? "—", t.sender ?? "—", t.msisdn ?? "—", t.organizationAccountReference ?? "—", parseFloat(String(t.amount ?? 0)) || 0, t.transactionStatus ?? "—"]))}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold hover:opacity-90" style={{ background: "rgba(255,255,255,0.15)", color: "#a7f3d0" }}>
+                <FileSpreadsheet size={13} /> Excel
               </button>
             )}
             {tab === "safaricom" && pulled && sfFiltered.length > 0 && (
@@ -5806,6 +5959,15 @@ function PaymentsPage() {
             <h1 className="text-lg font-bold text-white">Mpesa Payments</h1>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => downloadExcel(
+              `payments-${new Date().toISOString().slice(0, 10)}`, "Payments",
+              ["Payment ID", "Date", "Amount", "Paid By", "Purpose", "Mode", "Comment"],
+              filtered.map((p) => [p.payment_id ?? "—", fmtDate(p.date_paid), Number(p.amount), p.paid_by, p.purpose, p.mode, p.comment ?? "—"]),
+            )}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-emerald-800 hover:opacity-90"
+              style={{ background: "rgba(255,255,255,0.85)" }}>
+              <FileSpreadsheet size={13} /> Excel
+            </button>
             <button onClick={handleDownloadPdf}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-teal-800 hover:opacity-90"
               style={{ background: "rgba(255,255,255,0.85)" }}>
@@ -6886,7 +7048,20 @@ function ContributionDetail({
           </button>
         )}
         <button
+          onClick={() => downloadExcel(
+            `statement-EW${s.shareholder.member_number}-${new Date().toISOString().slice(0, 10)}`, "Statement",
+            ["Type", "Period", "Date", "Amount", "Status", "Payment Method", "Notes"],
+            [
+              ...effectiveContribs.map((c) => ["Contribution", `${MONTHS[c.month - 1]} ${c.year}`, c.payment_date ? fmtDate(c.payment_date) : "", Number(c.amount), c.status === "late" ? "Late" : "On time", parseContribMethod(c.notes), parseContribComment(c.notes)]),
+              ...(isFiltered ? [] : refunds.map((r) => ["Refund", "Refund", r.refund_date ? fmtDate(r.refund_date) : "", Number(r.amount), "Refund", "", r.notes ?? ""])),
+            ],
+          )}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold hover:opacity-80"
+          style={{ background: "#ecfdf5", color: "#047857", border: "1px solid #a7f3d0" }}>
+          <FileSpreadsheet size={13} /> Export Excel
+        </button>
+        <button
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold hover:opacity-80"
           style={{ background: "#f0fdf4", color: "#16a34a", border: "1px solid #bbf7d0" }}
           onClick={async () => {
             const co = await getCompanyDetails();
@@ -7344,6 +7519,20 @@ function ContributionsPage() {
               ))}
             </div>
             <button
+              onClick={() => {
+                if (!mySummary) return;
+                downloadExcel(
+                  `statement-EW${mySummary.shareholder.member_number}-${new Date().toISOString().slice(0, 10)}`, "Contributions",
+                  ["Month", "Year", "Date Paid", "Amount", "Status", "Payment Method", "Notes"],
+                  mySummary.contributions.map((c) => [MONTHS[c.month - 1], c.year, c.payment_date ? fmtDate(c.payment_date) : "", Number(c.amount), c.status, parseContribMethod(c.notes), parseContribComment(c.notes)]),
+                );
+              }}
+              disabled={!mySummary}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold flex-shrink-0 hover:opacity-90 disabled:opacity-40"
+              style={{ background: "#ecfdf5", color: "#047857" }}>
+              <FileSpreadsheet size={13} /> Excel
+            </button>
+            <button
               onClick={async () => {
                 if (!mySummary) return;
                 const co = await getCompanyDetails();
@@ -7426,6 +7615,17 @@ function ContributionsPage() {
             <p className="text-xs" style={{ color: "#94a3b8" }}>Monthly savings payments</p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => {
+              const exportRows = selected
+                ? selected.contributions.map((c) => [selected.shareholder.name, `EW#${selected.shareholder.member_number}`, MONTHS[c.month - 1], c.year, c.payment_date ? fmtDate(c.payment_date) : "", Number(c.amount), c.status, c.notes ?? ""])
+                : summaries.flatMap((summary) => summary.contributions.map((c) => [summary.shareholder.name, `EW#${summary.shareholder.member_number}`, MONTHS[c.month - 1], c.year, c.payment_date ? fmtDate(c.payment_date) : "", Number(c.amount), c.status, c.notes ?? ""]));
+              downloadExcel(`contributions-${new Date().toISOString().slice(0, 10)}`, "Contributions",
+                ["Member", "Member No.", "Month", "Year", "Date Paid", "Amount", "Status", "Notes"], exportRows);
+            }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold hover:opacity-90"
+              style={{ background: "rgba(16,185,129,0.2)", color: "#d1fae5" }}>
+              <FileSpreadsheet size={13} /> Excel
+            </button>
             <button onClick={async () => {
               const co = await getCompanyDetails();
               // If a member is selected in the detail pane, export their statement
