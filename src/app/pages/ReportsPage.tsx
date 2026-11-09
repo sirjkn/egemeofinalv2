@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   BarChart2, Link2, CreditCard, RotateCcw, Users, UserCircle2,
-  Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp,
+  Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp, AlertTriangle,
 } from "lucide-react";
 import {
   contributionsApi, paymentsApi, shareholdersApi, clientsApi, refundsApi,
@@ -17,7 +17,7 @@ import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
 import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 
-type ReportSub = "contributions" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits";
+type ReportSub = "contributions" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits" | "debtors";
 
 const REPORT_META: Record<ReportSub, { label: string; desc: string; color: string; bg: string; icon: React.ReactNode }> = {
   summary:       { label: "Annual Summary",       desc: "Membership, contributions & payments overview", color: "#1e2d4a", bg: "#eef2ff", icon: <BarChart2 size={22} /> },
@@ -27,6 +27,7 @@ const REPORT_META: Record<ReportSub, { label: string; desc: string; color: strin
   shareholders:  { label: "Shareholders List",     desc: "All shareholders with savings",                color: "#6366f1", bg: "#eef2ff", icon: <Users size={22} /> },
   clients:       { label: "Clients List",          desc: "All registered clients",                       color: "#a855f7", bg: "#faf5ff", icon: <UserCircle2 size={22} /> },
   profits:       { label: "Profit Distributions",  desc: "All profit payouts by project and member",     color: "#d97706", bg: "#fffbeb", icon: <TrendingUp size={22} /> },
+  debtors:       { label: "Plot Payment Debtors",  desc: "Outstanding plot balances by shareholder",     color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
 };
 
 function ReportsPage() {
@@ -85,6 +86,10 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   // ── profits-specific filter state ────────────────────────────────────────
   const [projectF,  setProjectF]  = useState("");
   const [projects,  setProjects]  = useState<{ id: number; project_name: string }[]>([]);
+  const [shareholderF, setShareholderF] = useState("");
+  const [shareholders, setShareholders] = useState<{ id: number; name: string; member_number: string | number; phone?: string }[]>([]);
+  const [plotF, setPlotF] = useState("");
+  const [plotOptions, setPlotOptions] = useState<{ id: number; project_id: number; plot_number: string }[]>([]);
 
   const [rows, setRows]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,18 +98,69 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
 
   useEffect(() => { getCompanyDetails().then(setCompany); }, []);
 
-  // ── load project list for profits filter ─────────────────────────────────
+  // ── load filter directories ───────────────────────────────────────────────
   useEffect(() => {
-    if (type !== "profits") return;
-    supabase.from("projects").select("id,project_name").order("project_name").then(({ data }) => {
-      setProjects(data ?? []);
-    });
+    if (!["profits", "debtors"].includes(type)) return;
+    const requests: PromiseLike<any>[] = [
+      supabase.from("projects").select("id,project_name").order("project_name").then(({ data }) => setProjects(data ?? [])),
+    ];
+    if (type === "debtors") {
+      requests.push(
+        supabase.from("shareholders").select("id,name,member_number,phone").order("name").then(({ data }) => setShareholders((data ?? []) as any)),
+        supabase.from("plots").select("id,project_id,plot_number").eq("assigned_to_type", "shareholder").order("plot_number").then(({ data }) => setPlotOptions((data ?? []) as any)),
+      );
+    }
+    Promise.all(requests).catch(() => {});
   }, [type]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      if (type === "profits") {
+      if (type === "debtors") {
+        let plotsQuery = supabase
+          .from("plots")
+          .select("id,plot_number,project_id,assigned_to_id,assigned_to_type,price,paid_amount,deadline,status")
+          .eq("assigned_to_type", "shareholder")
+          .not("assigned_to_id", "is", null)
+          .in("status", ["assigned", "sold"]);
+        if (shareholderF) plotsQuery = plotsQuery.eq("assigned_to_id", Number(shareholderF));
+        if (projectF) plotsQuery = plotsQuery.eq("project_id", Number(projectF));
+        if (plotF) plotsQuery = plotsQuery.eq("id", Number(plotF));
+        if (dateFrom) plotsQuery = plotsQuery.gte("deadline", dateFrom);
+        if (dateTo) plotsQuery = plotsQuery.lte("deadline", dateTo);
+        const { data: debtPlots, error: plotError } = await plotsQuery.order("deadline", { ascending: true, nullsFirst: false });
+        if (plotError) throw new Error(plotError.message);
+
+        const plotIds = (debtPlots ?? []).map((plot: any) => Number(plot.id));
+        const { data: paymentRows, error: paymentError } = plotIds.length
+          ? await supabase.from("plot_payments").select("plot_id,amount,payment_date,created_at").in("plot_id", plotIds)
+          : { data: [], error: null };
+        if (paymentError) throw new Error(paymentError.message);
+        const paidByPlot: Record<number, number> = {};
+        for (const payment of paymentRows ?? []) {
+          const id = Number(payment.plot_id);
+          paidByPlot[id] = (paidByPlot[id] ?? 0) + Number(payment.amount);
+        }
+        const shareholderMap = Object.fromEntries(shareholders.map((shareholder) => [shareholder.id, shareholder]));
+        const projectMap = Object.fromEntries(projects.map((project) => [project.id, project]));
+        const debtorRows = (debtPlots ?? []).map((plot: any) => {
+          const price = Number(plot.price ?? 0);
+          const historyPaid = paidByPlot[Number(plot.id)];
+          const paid = historyPaid == null ? Number(plot.paid_amount ?? 0) : historyPaid;
+          const balance = Math.max(0, price - paid);
+          return {
+            ...plot,
+            shareholder: shareholderMap[Number(plot.assigned_to_id)] ?? null,
+            project: projectMap[Number(plot.project_id)] ?? null,
+            price,
+            paid,
+            balance,
+            progress: price > 0 ? Math.min(100, Math.round((paid / price) * 100)) : 0,
+          };
+        }).filter((row: any) => row.balance > 0);
+        setRows(debtorRows);
+
+      } else if (type === "profits") {
         let q = supabase
           .from("profit_distributions")
           .select("*, project:projects(id,project_name), shareholder:shareholders(id,name,member_number), investor:investors(id,name,member_number)")
@@ -236,12 +292,37 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       }
     } catch { setRows([]); }
     finally { setLoading(false); }
-  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, projectF, contribStatusF]);
+  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, projectF, contribStatusF, shareholderF, plotF, shareholders, projects]);
 
   useEffect(() => { load(); }, [load]);
 
+  // Plot debtors must reflect new allocations, edits and payments immediately.
+  useEffect(() => {
+    if (type !== "debtors") return;
+    const channel = supabase
+      .channel(`plot-debtors-report-${Date.now()}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "plots" }, () => {
+        supabase.from("plots").select("id,project_id,plot_number").eq("assigned_to_type", "shareholder").order("plot_number")
+          .then(({ data }) => setPlotOptions((data ?? []) as any));
+        load();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "plot_payments" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "shareholders" }, () => {
+        supabase.from("shareholders").select("id,name,member_number,phone").order("name")
+          .then(({ data }) => setShareholders((data ?? []) as any));
+        load();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, () => {
+        supabase.from("projects").select("id,project_name").order("project_name")
+          .then(({ data }) => setProjects(data ?? []));
+        load();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [type, load]);
+
   // ── search filter applied in-memory for member lists ────────────────────
-  const filtered = (type === "contributions" || type === "payments" || type === "refunds" || type === "profits")
+  const filtered = (type === "contributions" || type === "payments" || type === "refunds" || type === "profits" || type === "debtors")
     ? rows.filter((r) => {
         if (!search) return true;
         const q = search.toLowerCase();
@@ -252,6 +333,9 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           const memberName = r.shareholder?.name ?? r.investor?.name ?? "";
           const memberNo = r.shareholder?.member_number ?? r.investor?.member_number ?? "";
           return memberName.toLowerCase().includes(q) || `EW#${memberNo}`.includes(q) || (r.project?.project_name ?? "").toLowerCase().includes(q);
+        }
+        if (type === "debtors") {
+          return `${r.shareholder?.name ?? ""} ${r.shareholder?.member_number ?? ""} ${r.project?.project_name ?? ""} ${r.plot_number ?? ""}`.toLowerCase().includes(q);
         }
         return true;
       })
@@ -271,9 +355,25 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         dateFrom && `From: ${dateFrom}`,
         dateTo   && `To: ${dateTo}`,
         projectF && `Project: ${projects.find((p) => String(p.id) === projectF)?.project_name ?? projectF}`,
+        shareholderF && `Shareholder: ${shareholders.find((s) => String(s.id) === shareholderF)?.name ?? shareholderF}`,
+        plotF && `Plot: ${plotOptions.find((p) => String(p.id) === plotF)?.plot_number ?? plotF}`,
       ].filter(Boolean).join(" · ") || "All records";
 
-      if (type === "contributions") {
+      if (type === "debtors") {
+        const totalDebt = filtered.reduce((sum: number, row: any) => sum + Number(row.balance), 0);
+        downloadReportPdf([{
+          title: "Outstanding Plot Balances",
+          headers: ["Shareholder", "Member No.", "Phone", "Project", "Plot", "Deadline", "Plot Price", "Amount Paid", "Balance Due", "Paid %"],
+          rows: filtered.map((row: any) => [
+            row.shareholder?.name ?? "—", `EW#${row.shareholder?.member_number ?? "—"}`, row.shareholder?.phone ?? "—",
+            row.project?.project_name ?? "—", row.plot_number ?? "—", row.deadline ? fmtDate(row.deadline) : "—",
+            Number(row.price).toLocaleString("en-KE"), Number(row.paid).toLocaleString("en-KE"),
+            Number(row.balance).toLocaleString("en-KE"), `${row.progress}%`,
+          ]),
+          total: totalDebt,
+        }], "Plot Payment Debtors Report", co, filterStr);
+
+      } else if (type === "contributions") {
         downloadContributionsPdf(filtered.map((c: any) => ({
           member: c.shareholder?.name ?? "—",
           memberNo: `EW#${c.shareholder?.member_number ?? "—"}`,
@@ -364,7 +464,15 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
 
   const handleExcel = () => {
     const stamp = new Date().toISOString().slice(0, 10);
-    if (type === "contributions") {
+    if (type === "debtors") {
+      downloadExcel(`plot-payment-debtors-${stamp}`, "Plot Debtors",
+        ["Shareholder", "Member No.", "Phone", "Project", "Plot", "Deadline", "Plot Price", "Amount Paid", "Balance Due", "Paid %"],
+        filtered.map((row: any) => [
+          row.shareholder?.name ?? "—", `EW#${row.shareholder?.member_number ?? "—"}`, row.shareholder?.phone ?? "—",
+          row.project?.project_name ?? "—", row.plot_number ?? "—", row.deadline ? fmtDate(row.deadline) : "—",
+          Number(row.price), Number(row.paid), Number(row.balance), row.progress / 100,
+        ]));
+    } else if (type === "contributions") {
       downloadExcel(`contributions-report-${stamp}`, "Contributions",
         ["Member", "Member No.", "Month", "Year", "Date Paid", "Amount", "Status", "Notes"],
         filtered.map((c: any) => [c.shareholder?.name ?? "—", `EW#${c.shareholder?.member_number ?? "—"}`, MONTHS[c.month - 1], c.year, c.payment_date ? fmtDate(c.payment_date) : "—", Number(c.amount), c.status, c.notes ?? "—"]));
@@ -410,11 +518,11 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     <div className="px-5 py-3 border-b flex flex-wrap gap-2 items-center bg-white flex-shrink-0" style={{ borderColor: "var(--border)" }}>
       <Filter size={13} className="text-gray-400 flex-shrink-0" />
       {/* Search */}
-      {["contributions", "payments", "refunds", "profits"].includes(type) && (
+      {["contributions", "payments", "refunds", "profits", "debtors"].includes(type) && (
         <div className="relative flex-1 min-w-[160px]">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder={type === "profits" ? "Search member or project…" : "Search…"}
+            placeholder={type === "profits" ? "Search member or project…" : type === "debtors" ? "Search shareholder, project or plot…" : "Search…"}
             className="w-full pl-7 pr-2 py-1.5 border rounded-lg text-xs focus:outline-none"
             style={{ borderColor: "var(--border)" }} />
         </div>
@@ -482,21 +590,41 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         </select>
       )}
       {/* Date range */}
-      {["payments", "refunds", "profits"].includes(type) && (
+      {["payments", "refunds", "profits", "debtors"].includes(type) && (
         <>
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white" style={{ borderColor: "var(--border)" }} />
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white" style={{ borderColor: "var(--border)" }} />
+          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+            From
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+              className="border rounded-lg px-2 py-1.5 text-xs font-normal text-slate-700 focus:outline-none bg-white" style={{ borderColor: "var(--border)" }} />
+          </label>
+          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+            To
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+              className="border rounded-lg px-2 py-1.5 text-xs font-normal text-slate-700 focus:outline-none bg-white" style={{ borderColor: "var(--border)" }} />
+          </label>
         </>
       )}
-      {/* Project filter (profits only) */}
-      {type === "profits" && (
-        <select value={projectF} onChange={(e) => setProjectF(e.target.value)}
+      {/* Project filter */}
+      {["profits", "debtors"].includes(type) && (
+        <select value={projectF} onChange={(e) => { setProjectF(e.target.value); if (type === "debtors") setPlotF(""); }}
           className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white" style={{ borderColor: "var(--border)" }}>
           <option value="">All Projects</option>
           {projects.map((p) => <option key={p.id} value={String(p.id)}>{p.project_name}</option>)}
         </select>
+      )}
+      {type === "debtors" && (
+        <>
+          <select value={shareholderF} onChange={(e) => setShareholderF(e.target.value)}
+            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white max-w-[210px]" style={{ borderColor: "var(--border)" }}>
+            <option value="">All Shareholders</option>
+            {shareholders.map((shareholder) => <option key={shareholder.id} value={String(shareholder.id)}>{shareholder.name} · EW#{shareholder.member_number}</option>)}
+          </select>
+          <select value={plotF} disabled={!projectF} onChange={(e) => setPlotF(e.target.value)}
+            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white disabled:bg-slate-100 disabled:text-slate-400" style={{ borderColor: "var(--border)" }}>
+            <option value="">{projectF ? "All Plots" : "Select project first"}</option>
+            {plotOptions.filter((plot) => String(plot.project_id) === projectF).map((plot) => <option key={plot.id} value={String(plot.id)}>{plot.plot_number}</option>)}
+          </select>
+        </>
       )}
     </div>
   );
@@ -504,6 +632,73 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   // ── per-type table ────────────────────────────────────────────────────────
   const renderTable = () => {
     if (loading) return <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-gray-300" /></div>;
+
+    if (type === "debtors") {
+      const totalPrice = filtered.reduce((sum: number, row: any) => sum + Number(row.price), 0);
+      const totalPaid = filtered.reduce((sum: number, row: any) => sum + Number(row.paid), 0);
+      const totalDebt = filtered.reduce((sum: number, row: any) => sum + Number(row.balance), 0);
+      return (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-5 py-3 border-b bg-slate-50" style={{ borderColor: "var(--border)" }}>
+            {[
+              { label: "Debtors", value: String(filtered.length), color: "#475569" },
+              { label: "Plot Value", value: fmtKESFull(totalPrice), color: "#1e3a5f" },
+              { label: "Amount Paid", value: fmtKESFull(totalPaid), color: "#16a34a" },
+              { label: "Outstanding Debt", value: fmtKESFull(totalDebt), color: "#dc2626" },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-xl border bg-white px-3 py-2.5" style={{ borderColor: "var(--border)" }}>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{stat.label}</p>
+                <p className="mt-0.5 text-sm font-extrabold" style={{ color: stat.color }}>{stat.value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="overflow-x-auto flex-1">
+            <table className="w-full text-sm min-w-[1050px]">
+              <thead style={{ background: "#1e3a5f" }}>
+                <tr>{["Shareholder", "Member No.", "Phone", "Project", "Plot", "Deadline", "Plot Price", "Amount Paid", "Balance Due", "Progress"].map((heading) => (
+                  <th key={heading} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-white">{heading}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {filtered.map((row: any, index: number) => (
+                  <tr key={row.id} className="border-t hover:bg-red-50/40" style={{ borderColor: "var(--border)", background: index % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-800">{row.shareholder?.name ?? "Unknown"}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-indigo-600">EW#{row.shareholder?.member_number ?? "—"}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{row.shareholder?.phone ?? "—"}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.project?.project_name ?? "—"}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-blue-700">{row.plot_number ?? "—"}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{row.deadline ? fmtDate(row.deadline) : "Not set"}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{fmtKESFull(Number(row.price))}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-emerald-600">{fmtKESFull(Number(row.paid))}</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-red-600">{fmtKESFull(Number(row.balance))}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex min-w-28 items-center gap-2">
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-red-100">
+                          <div className="h-full rounded-full bg-red-500" style={{ width: `${row.progress}%` }} />
+                        </div>
+                        <span className="text-[10px] font-bold text-red-600">{row.progress}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              {filtered.length > 0 && (
+                <tfoot>
+                  <tr className="border-t-2" style={{ background: "#fef2f2", borderColor: "#fecaca" }}>
+                    <td colSpan={6} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Totals</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-slate-800">{fmtKESFull(totalPrice)}</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-emerald-700">{fmtKESFull(totalPaid)}</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalDebt)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+            {filtered.length === 0 && <div className="py-14 text-center"><AlertTriangle size={28} className="mx-auto mb-2 text-slate-300" /><p className="text-sm text-slate-400">No outstanding plot debt matches the selected filters.</p></div>}
+          </div>
+        </>
+      );
+    }
 
     if (type === "contributions") {
       const paidCount   = filtered.filter((c: any) => c.status !== "unpaid").length;
