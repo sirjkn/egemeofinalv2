@@ -27,7 +27,7 @@ const REPORT_META: Record<ReportSub, { label: string; desc: string; color: strin
   shareholders:  { label: "Shareholders List",     desc: "All shareholders with savings",                color: "#6366f1", bg: "#eef2ff", icon: <Users size={22} /> },
   clients:       { label: "Clients List",          desc: "All registered clients",                       color: "#a855f7", bg: "#faf5ff", icon: <UserCircle2 size={22} /> },
   profits:       { label: "Profit Distributions",  desc: "All profit payouts by project and member",     color: "#d97706", bg: "#fffbeb", icon: <TrendingUp size={22} /> },
-  debtors:       { label: "Plot Payment Debtors",  desc: "Outstanding plot balances by shareholder",     color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
+  debtors:       { label: "Debtors",               desc: "Monthly plot-payment shortfalls and balances", color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
 };
 
 function ReportsPage() {
@@ -87,7 +87,9 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   const [projectF,  setProjectF]  = useState("");
   const [projects,  setProjects]  = useState<{ id: number; project_name: string }[]>([]);
   const [shareholderF, setShareholderF] = useState("");
+  const [memberTypeF, setMemberTypeF] = useState<"" | "shareholder" | "client">("");
   const [shareholders, setShareholders] = useState<{ id: number; name: string; member_number: string | number; phone?: string }[]>([]);
+  const [debtorClients, setDebtorClients] = useState<{ id: number; name: string; member_number: string | number; phone?: string }[]>([]);
   const [plotF, setPlotF] = useState("");
   const [plotOptions, setPlotOptions] = useState<{ id: number; project_id: number; plot_number: string }[]>([]);
 
@@ -107,11 +109,19 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     if (type === "debtors") {
       requests.push(
         supabase.from("shareholders").select("id,name,member_number,phone").order("name").then(({ data }) => setShareholders((data ?? []) as any)),
-        supabase.from("plots").select("id,project_id,plot_number").eq("assigned_to_type", "shareholder").order("plot_number").then(({ data }) => setPlotOptions((data ?? []) as any)),
+        supabase.from("clients").select("id,name,member_number,phone").order("name").then(({ data }) => setDebtorClients((data ?? []) as any)),
+        supabase.from("plots").select("id,project_id,plot_number").not("assigned_to_id", "is", null).order("plot_number").then(({ data }) => setPlotOptions((data ?? []) as any)),
       );
     }
     Promise.all(requests).catch(() => {});
   }, [type]);
+
+  useEffect(() => {
+    if (type !== "debtors" || dateFrom || dateTo) return;
+    const now = new Date();
+    setDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`);
+    setDateTo(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()).padStart(2, "0")}`);
+  }, [type, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,15 +129,17 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       if (type === "debtors") {
         let plotsQuery = supabase
           .from("plots")
-          .select("id,plot_number,project_id,assigned_to_id,assigned_to_type,price,paid_amount,deadline,status")
-          .eq("assigned_to_type", "shareholder")
+          .select("id,plot_number,project_id,assigned_to_id,assigned_to_type,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status,created_at")
           .not("assigned_to_id", "is", null)
           .in("status", ["assigned", "sold"]);
-        if (shareholderF) plotsQuery = plotsQuery.eq("assigned_to_id", Number(shareholderF));
+        if (shareholderF) {
+          const [memberType, memberId] = shareholderF.split(":");
+          plotsQuery = plotsQuery.eq("assigned_to_type", memberType).eq("assigned_to_id", Number(memberId));
+        } else if (memberTypeF) {
+          plotsQuery = plotsQuery.eq("assigned_to_type", memberTypeF);
+        }
         if (projectF) plotsQuery = plotsQuery.eq("project_id", Number(projectF));
         if (plotF) plotsQuery = plotsQuery.eq("id", Number(plotF));
-        if (dateFrom) plotsQuery = plotsQuery.gte("deadline", dateFrom);
-        if (dateTo) plotsQuery = plotsQuery.lte("deadline", dateTo);
         const { data: debtPlots, error: plotError } = await plotsQuery.order("deadline", { ascending: true, nullsFirst: false });
         if (plotError) throw new Error(plotError.message);
 
@@ -142,22 +154,67 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           paidByPlot[id] = (paidByPlot[id] ?? 0) + Number(payment.amount);
         }
         const shareholderMap = Object.fromEntries(shareholders.map((shareholder) => [shareholder.id, shareholder]));
+        const clientMap = Object.fromEntries(debtorClients.map((client) => [client.id, client]));
         const projectMap = Object.fromEntries(projects.map((project) => [project.id, project]));
-        const debtorRows = (debtPlots ?? []).map((plot: any) => {
+        const start = dateFrom ? new Date(`${dateFrom}T00:00:00`) : new Date();
+        const end = dateTo ? new Date(`${dateTo}T23:59:59`) : start;
+        const periods: Array<{ year: number; month: number; label: string }> = [];
+        const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+        const last = new Date(end.getFullYear(), end.getMonth(), 1);
+        while (cursor <= last && periods.length < 120) {
+          periods.push({
+            year: cursor.getFullYear(),
+            month: cursor.getMonth(),
+            label: `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`,
+          });
+          cursor.setMonth(cursor.getMonth() + 1);
+        }
+        const paymentsByPlot: Record<number, any[]> = {};
+        for (const payment of paymentRows ?? []) {
+          const id = Number(payment.plot_id);
+          if (!paymentsByPlot[id]) paymentsByPlot[id] = [];
+          paymentsByPlot[id].push(payment);
+        }
+        const debtorRows = (debtPlots ?? []).flatMap((plot: any) => {
           const price = Number(plot.price ?? 0);
           const historyPaid = paidByPlot[Number(plot.id)];
-          const paid = historyPaid == null ? Number(plot.paid_amount ?? 0) : historyPaid;
-          const balance = Math.max(0, price - paid);
-          return {
-            ...plot,
-            shareholder: shareholderMap[Number(plot.assigned_to_id)] ?? null,
-            project: projectMap[Number(plot.project_id)] ?? null,
-            price,
-            paid,
-            balance,
-            progress: price > 0 ? Math.min(100, Math.round((paid / price) * 100)) : 0,
-          };
-        }).filter((row: any) => row.balance > 0);
+          const allTimePaid = historyPaid == null ? Number(plot.paid_amount ?? 0) : historyPaid;
+          const minimumDue = Number(plot.min_monthly_payment ?? 0) > 0
+            ? Number(plot.min_monthly_payment)
+            : price / Math.max(1, Number(plot.loan_duration_months ?? 12));
+          const deadlineDay = Math.max(1, Number(String(plot.deadline ?? "").split("-")[2] || 1));
+          const member = plot.assigned_to_type === "client"
+            ? clientMap[Number(plot.assigned_to_id)] ?? null
+            : shareholderMap[Number(plot.assigned_to_id)] ?? null;
+          return periods.map((period) => {
+            const daysInMonth = new Date(period.year, period.month + 1, 0).getDate();
+            const deadlineDate = new Date(period.year, period.month, Math.min(deadlineDay, daysInMonth), 23, 59, 59);
+            const paidBeforeDeadline = (paymentsByPlot[Number(plot.id)] ?? []).reduce((sum, payment) => {
+              const paymentDate = new Date(`${String(payment.payment_date ?? payment.created_at).slice(0, 10)}T12:00:00`);
+              const inMonth = paymentDate.getFullYear() === period.year && paymentDate.getMonth() === period.month;
+              return inMonth && paymentDate <= deadlineDate ? sum + Number(payment.amount) : sum;
+            }, 0);
+            const due = Math.max(0, minimumDue - paidBeforeDeadline);
+            const balance = Math.max(0, price - allTimePaid);
+            return {
+              ...plot,
+              shareholder: member,
+              memberType: plot.assigned_to_type,
+              project: projectMap[Number(plot.project_id)] ?? null,
+              price,
+              allTimePaid,
+              period: period.label,
+              periodYear: period.year,
+              periodMonth: period.month + 1,
+              monthlyDue: minimumDue,
+              paidBeforeDeadline,
+              due,
+              balance,
+              monthlyDeadline: deadlineDate.toISOString().slice(0, 10),
+              progress: price > 0 ? Math.min(100, Math.round((allTimePaid / price) * 100)) : 0,
+            };
+          });
+        }).filter((row: any) => row.due > 0 && row.balance > 0);
         setRows(debtorRows);
 
       } else if (type === "profits") {
@@ -292,7 +349,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       }
     } catch { setRows([]); }
     finally { setLoading(false); }
-  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, projectF, contribStatusF, shareholderF, plotF, shareholders, projects]);
+  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, projectF, contribStatusF, shareholderF, memberTypeF, plotF, shareholders, debtorClients, projects]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -302,7 +359,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     const channel = supabase
       .channel(`plot-debtors-report-${Date.now()}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "plots" }, () => {
-        supabase.from("plots").select("id,project_id,plot_number").eq("assigned_to_type", "shareholder").order("plot_number")
+        supabase.from("plots").select("id,project_id,plot_number").not("assigned_to_id", "is", null).order("plot_number")
           .then(({ data }) => setPlotOptions((data ?? []) as any));
         load();
       })
@@ -310,6 +367,11 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       .on("postgres_changes", { event: "*", schema: "public", table: "shareholders" }, () => {
         supabase.from("shareholders").select("id,name,member_number,phone").order("name")
           .then(({ data }) => setShareholders((data ?? []) as any));
+        load();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "clients" }, () => {
+        supabase.from("clients").select("id,name,member_number,phone").order("name")
+          .then(({ data }) => setDebtorClients((data ?? []) as any));
         load();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, () => {
@@ -355,23 +417,30 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         dateFrom && `From: ${dateFrom}`,
         dateTo   && `To: ${dateTo}`,
         projectF && `Project: ${projects.find((p) => String(p.id) === projectF)?.project_name ?? projectF}`,
-        shareholderF && `Shareholder: ${shareholders.find((s) => String(s.id) === shareholderF)?.name ?? shareholderF}`,
+        shareholderF && `Member: ${shareholderF.startsWith("client:")
+          ? debtorClients.find((member) => `client:${member.id}` === shareholderF)?.name
+          : shareholders.find((member) => `shareholder:${member.id}` === shareholderF)?.name}`,
+        memberTypeF && `Member Type: ${memberTypeF === "client" ? "Client" : "Shareholder"}`,
         plotF && `Plot: ${plotOptions.find((p) => String(p.id) === plotF)?.plot_number ?? plotF}`,
       ].filter(Boolean).join(" · ") || "All records";
 
       if (type === "debtors") {
-        const totalDebt = filtered.reduce((sum: number, row: any) => sum + Number(row.balance), 0);
+        const uniquePlotBalances = new Map<number, number>();
+        filtered.forEach((row: any) => uniquePlotBalances.set(Number(row.id), Number(row.balance)));
+        const totalDebt = Array.from(uniquePlotBalances.values()).reduce((sum, balance) => sum + balance, 0);
         downloadReportPdf([{
-          title: "Outstanding Plot Balances",
-          headers: ["Shareholder", "Member No.", "Phone", "Project", "Plot", "Deadline", "Plot Price", "Amount Paid", "Balance Due", "Paid %"],
+          title: "Monthly Plot Debtors",
+          headers: ["Member", "Type", "Member No.", "Phone", "Project", "Plot", "Payment Month", "Deadline", "Minimum Payment", "Paid Before Deadline", "Due", "Plot Balance", "Progress"],
           rows: filtered.map((row: any) => [
-            row.shareholder?.name ?? "—", `EW#${row.shareholder?.member_number ?? "—"}`, row.shareholder?.phone ?? "—",
-            row.project?.project_name ?? "—", row.plot_number ?? "—", row.deadline ? fmtDate(row.deadline) : "—",
-            Number(row.price).toLocaleString("en-KE"), Number(row.paid).toLocaleString("en-KE"),
-            Number(row.balance).toLocaleString("en-KE"), `${row.progress}%`,
+            row.shareholder?.name ?? "—", row.memberType === "client" ? "Client" : "Shareholder",
+            row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
+            row.shareholder?.phone ?? "—", row.project?.project_name ?? "—", row.plot_number ?? "—",
+            row.period, fmtDate(row.monthlyDeadline), Number(row.monthlyDue).toLocaleString("en-KE"),
+            Number(row.paidBeforeDeadline).toLocaleString("en-KE"),
+            Number(row.due).toLocaleString("en-KE"), Number(row.balance).toLocaleString("en-KE"), `${row.progress}%`,
           ]),
           total: totalDebt,
-        }], "Plot Payment Debtors Report", co, filterStr);
+        }], "Debtors Report", co, filterStr);
 
       } else if (type === "contributions") {
         downloadContributionsPdf(filtered.map((c: any) => ({
@@ -465,12 +534,13 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   const handleExcel = () => {
     const stamp = new Date().toISOString().slice(0, 10);
     if (type === "debtors") {
-      downloadExcel(`plot-payment-debtors-${stamp}`, "Plot Debtors",
-        ["Shareholder", "Member No.", "Phone", "Project", "Plot", "Deadline", "Plot Price", "Amount Paid", "Balance Due", "Paid %"],
+      downloadExcel(`debtors-report-${stamp}`, "Debtors",
+        ["Member", "Type", "Member No.", "Phone", "Project", "Plot", "Payment Month", "Deadline", "Minimum Payment", "Paid Before Deadline", "Due", "Plot Balance", "Progress"],
         filtered.map((row: any) => [
-          row.shareholder?.name ?? "—", `EW#${row.shareholder?.member_number ?? "—"}`, row.shareholder?.phone ?? "—",
-          row.project?.project_name ?? "—", row.plot_number ?? "—", row.deadline ? fmtDate(row.deadline) : "—",
-          Number(row.price), Number(row.paid), Number(row.balance), row.progress / 100,
+          row.shareholder?.name ?? "—", row.memberType === "client" ? "Client" : "Shareholder",
+          row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
+          row.shareholder?.phone ?? "—", row.project?.project_name ?? "—", row.plot_number ?? "—",
+          row.period, fmtDate(row.monthlyDeadline), Number(row.monthlyDue), Number(row.paidBeforeDeadline), Number(row.due), Number(row.balance), row.progress / 100,
         ]));
     } else if (type === "contributions") {
       downloadExcel(`contributions-report-${stamp}`, "Contributions",
@@ -522,7 +592,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         <div className="relative flex-1 min-w-[160px]">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder={type === "profits" ? "Search member or project…" : type === "debtors" ? "Search shareholder, project or plot…" : "Search…"}
+            placeholder={type === "profits" ? "Search member or project…" : type === "debtors" ? "Search member/client, project or plot…" : "Search…"}
             className="w-full pl-7 pr-2 py-1.5 border rounded-lg text-xs focus:outline-none"
             style={{ borderColor: "var(--border)" }} />
         </div>
@@ -614,10 +684,25 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       )}
       {type === "debtors" && (
         <>
+          <select value={memberTypeF} onChange={(e) => {
+            const next = e.target.value as "" | "shareholder" | "client";
+            setMemberTypeF(next);
+            if (shareholderF && !shareholderF.startsWith(`${next}:`)) setShareholderF("");
+          }}
+            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white" style={{ borderColor: "var(--border)" }}>
+            <option value="">All Member Types</option>
+            <option value="shareholder">Shareholders</option>
+            <option value="client">Clients</option>
+          </select>
           <select value={shareholderF} onChange={(e) => setShareholderF(e.target.value)}
             className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white max-w-[210px]" style={{ borderColor: "var(--border)" }}>
-            <option value="">All Shareholders</option>
-            {shareholders.map((shareholder) => <option key={shareholder.id} value={String(shareholder.id)}>{shareholder.name} · EW#{shareholder.member_number}</option>)}
+            <option value="">All Shareholders & Clients</option>
+            {memberTypeF !== "client" && <optgroup label="Shareholders">
+              {shareholders.map((shareholder) => <option key={`shareholder-${shareholder.id}`} value={`shareholder:${shareholder.id}`}>{shareholder.name} · EW#{shareholder.member_number}</option>)}
+            </optgroup>}
+            {memberTypeF !== "shareholder" && <optgroup label="Clients">
+              {debtorClients.map((client) => <option key={`client-${client.id}`} value={`client:${client.id}`}>{client.name} · {client.member_number}</option>)}
+            </optgroup>}
           </select>
           <select value={plotF} disabled={!projectF} onChange={(e) => setPlotF(e.target.value)}
             className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white disabled:bg-slate-100 disabled:text-slate-400" style={{ borderColor: "var(--border)" }}>
@@ -634,49 +719,61 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     if (loading) return <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-gray-300" /></div>;
 
     if (type === "debtors") {
-      const totalPrice = filtered.reduce((sum: number, row: any) => sum + Number(row.price), 0);
-      const totalPaid = filtered.reduce((sum: number, row: any) => sum + Number(row.paid), 0);
-      const totalDebt = filtered.reduce((sum: number, row: any) => sum + Number(row.balance), 0);
+      const totalMinimum = filtered.reduce((sum: number, row: any) => sum + Number(row.monthlyDue), 0);
+      const totalPaid = filtered.reduce((sum: number, row: any) => sum + Number(row.paidBeforeDeadline), 0);
+      const monthlyDebts = filtered.reduce((sum: number, row: any) => sum + Number(row.due), 0);
+      const uniquePlots = new Map<number, any>();
+      filtered.forEach((row: any) => uniquePlots.set(Number(row.id), row));
+      const totalPlotsDue = Array.from(uniquePlots.values()).reduce((sum: number, row: any) => sum + Number(row.balance), 0);
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+      const debtorsToday = new Set(
+        filtered
+          .filter((row: any) => row.monthlyDeadline <= today && Number(row.due) > 0)
+          .map((row: any) => `${row.memberType}:${row.assigned_to_id}`),
+      ).size;
       return (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-5 py-3 border-b bg-slate-50" style={{ borderColor: "var(--border)" }}>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-5 py-4 border-b bg-slate-50" style={{ borderColor: "var(--border)" }}>
             {[
-              { label: "Debtors", value: String(filtered.length), color: "#475569" },
-              { label: "Plot Value", value: fmtKESFull(totalPrice), color: "#1e3a5f" },
-              { label: "Amount Paid", value: fmtKESFull(totalPaid), color: "#16a34a" },
-              { label: "Outstanding Debt", value: fmtKESFull(totalDebt), color: "#dc2626" },
+              { label: "Total Plots Due Amount", value: fmtKESFull(totalPlotsDue), color: "#dc2626", sub: `${uniquePlots.size} plot${uniquePlots.size === 1 ? "" : "s"} with balances` },
+              { label: "Monthly Debts", value: fmtKESFull(monthlyDebts), color: "#d97706", sub: `${fmtKESFull(totalPaid)} paid before deadline` },
+              { label: "Total Debtors Today", value: String(debtorsToday), color: "#1e3a5f", sub: `Based on deadline as at ${fmtDate(today)}` },
             ].map((stat) => (
-              <div key={stat.label} className="rounded-xl border bg-white px-3 py-2.5" style={{ borderColor: "var(--border)" }}>
+              <div key={stat.label} className="rounded-xl border bg-white px-4 py-3.5" style={{ borderColor: "var(--border)" }}>
                 <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{stat.label}</p>
-                <p className="mt-0.5 text-sm font-extrabold" style={{ color: stat.color }}>{stat.value}</p>
+                <p className="mt-1 text-lg font-extrabold" style={{ color: stat.color }}>{stat.value}</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">{stat.sub}</p>
               </div>
             ))}
           </div>
           <div className="overflow-x-auto flex-1">
-            <table className="w-full text-sm min-w-[1050px]">
+            <table className="w-full text-sm min-w-[1250px]">
               <thead style={{ background: "#1e3a5f" }}>
-                <tr>{["Shareholder", "Member No.", "Phone", "Project", "Plot", "Deadline", "Plot Price", "Amount Paid", "Balance Due", "Progress"].map((heading) => (
+                <tr>{["Member", "Type", "No.", "Phone", "Project", "Plot", "Payment Month", "Deadline", "Minimum Payment", "Paid", "Due", "Balance", "Progress"].map((heading) => (
                   <th key={heading} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-white">{heading}</th>
                 ))}</tr>
               </thead>
               <tbody>
                 {filtered.map((row: any, index: number) => (
-                  <tr key={row.id} className="border-t hover:bg-red-50/40" style={{ borderColor: "var(--border)", background: index % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                  <tr key={`${row.id}-${row.periodYear}-${row.periodMonth}`} className="border-t hover:bg-red-50/40" style={{ borderColor: "var(--border)", background: index % 2 === 0 ? "#fff" : "#f8fafc" }}>
                     <td className="px-3 py-2 text-xs font-semibold text-slate-800">{row.shareholder?.name ?? "Unknown"}</td>
-                    <td className="px-3 py-2 text-xs font-bold text-indigo-600">EW#{row.shareholder?.member_number ?? "—"}</td>
+                    <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${row.memberType === "client" ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700"}`}>{row.memberType === "client" ? "Client" : "Shareholder"}</span></td>
+                    <td className="px-3 py-2 text-xs font-bold text-indigo-600">{row.memberType === "client" ? row.shareholder?.member_number ?? "—" : `EW#${row.shareholder?.member_number ?? "—"}`}</td>
                     <td className="px-3 py-2 text-xs text-slate-500">{row.shareholder?.phone ?? "—"}</td>
                     <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.project?.project_name ?? "—"}</td>
                     <td className="px-3 py-2 text-xs font-bold text-blue-700">{row.plot_number ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">{row.deadline ? fmtDate(row.deadline) : "Not set"}</td>
-                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{fmtKESFull(Number(row.price))}</td>
-                    <td className="px-3 py-2 text-xs font-bold text-emerald-600">{fmtKESFull(Number(row.paid))}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.period}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{fmtDate(row.monthlyDeadline)}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{fmtKESFull(Number(row.monthlyDue))}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-emerald-600">{fmtKESFull(Number(row.paidBeforeDeadline))}</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-orange-600">{fmtKESFull(Number(row.due))}</td>
                     <td className="px-3 py-2 text-xs font-extrabold text-red-600">{fmtKESFull(Number(row.balance))}</td>
                     <td className="px-3 py-2">
                       <div className="flex min-w-28 items-center gap-2">
-                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-red-100">
-                          <div className="h-full rounded-full bg-red-500" style={{ width: `${row.progress}%` }} />
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${row.progress}%` }} />
                         </div>
-                        <span className="text-[10px] font-bold text-red-600">{row.progress}%</span>
+                        <span className="text-[10px] font-bold text-emerald-700">{row.progress}%</span>
                       </div>
                     </td>
                   </tr>
@@ -685,10 +782,11 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
               {filtered.length > 0 && (
                 <tfoot>
                   <tr className="border-t-2" style={{ background: "#fef2f2", borderColor: "#fecaca" }}>
-                    <td colSpan={6} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Totals</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-slate-800">{fmtKESFull(totalPrice)}</td>
+                    <td colSpan={8} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Totals</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-slate-800">{fmtKESFull(totalMinimum)}</td>
                     <td className="px-3 py-2 text-xs font-extrabold text-emerald-700">{fmtKESFull(totalPaid)}</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalDebt)}</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-orange-700">{fmtKESFull(monthlyDebts)}</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalPlotsDue)}</td>
                     <td />
                   </tr>
                 </tfoot>

@@ -905,6 +905,7 @@ export interface PlotAssignPayload {
   interest_amount?: number;
   min_monthly_payment?: number;
   deadline?: string;
+  price?: number;
 }
 
 export const projectsApi = {
@@ -1083,6 +1084,7 @@ export const plotsApi = {
       interest_amount: p.interest_amount ?? null,
       min_monthly_payment: p.min_monthly_payment ?? null,
       deadline: p.deadline ?? null,
+      ...(p.price != null ? { price: p.price } : {}),
       paid_amount: restoredPaid,
     }).eq("id", plot_id).select().single();
     if (error) throw new Error(error.message);
@@ -1093,7 +1095,8 @@ export const plotsApi = {
     const { data, error } = await supabase.from("plots").update({
       status: "available", assigned_to_id: null, assigned_to_type: null,
       payment_mode: null, loan_duration_months: null,
-      interest_type: null, interest_amount: null, paid_amount: 0,
+      interest_type: null, interest_amount: null, min_monthly_payment: null,
+      deadline: null, paid_amount: 0,
     }).eq("id", plot_id).select().single();
     if (error) throw new Error(error.message);
     return data;

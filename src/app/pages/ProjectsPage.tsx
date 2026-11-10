@@ -196,27 +196,34 @@ function AddCoOwnerModal({ plot, shareholders, clients, existingCoOwners, onClos
 }
 
 function AssignPlotModal({
-  plot, projectName, shareholders, clients, onClose, onSave,
+  plot, projectName, shareholders, clients, onClose, onSave, onUnassign,
 }: {
   plot: Plot; projectName: string;
   shareholders: Shareholder[]; clients: Client[];
   onClose: () => void; onSave: (plotId: number, p: PlotAssignPayload) => Promise<void>;
+  onUnassign: (plotId: number) => Promise<void>;
 }) {
-  const [assignTo, setAssignTo] = useState<"shareholder" | "client">("shareholder");
-  const [memberId, setMemberId] = useState<number | "">("");
-  const [payMode, setPayMode] = useState<"cash" | "installment">("cash");
-  const [duration, setDuration] = useState(12);
-  const [intType, setIntType] = useState<"fixed" | "percentage">("fixed");
-  const [intAmount, setIntAmount] = useState("");
-  const [minMonthlyPayment, setMinMonthlyPayment] = useState("");
+  const isAssigned = plot.status === "assigned" && !!plot.assigned_to_id;
+  const [assignTo, setAssignTo] = useState<"shareholder" | "client">(plot.assigned_to_type ?? "shareholder");
+  const [memberId, setMemberId] = useState<number | "">(plot.assigned_to_id ?? "");
+  const [payMode, setPayMode] = useState<"cash" | "installment">(plot.payment_mode ?? "cash");
+  const [duration, setDuration] = useState(plot.loan_duration_months ?? 12);
+  const [intType, setIntType] = useState<"fixed" | "percentage">(plot.interest_type ?? "fixed");
+  const [intAmount, setIntAmount] = useState(plot.interest_amount != null ? String(plot.interest_amount) : "");
+  const [minMonthlyPayment, setMinMonthlyPayment] = useState(plot.min_monthly_payment != null ? String(plot.min_monthly_payment) : "");
+  const [plotPrice, setPlotPrice] = useState(String(plot.price ?? 0));
   const todayStr = new Date().toISOString().split("T")[0];
-  const [deadline, setDeadline] = useState(todayStr);
+  const [deadline, setDeadline] = useState(plot.deadline ?? todayStr);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const list = assignTo === "shareholder" ? shareholders : clients;
 
   const submit = async () => {
     if (!memberId) { setErr("Please select a member."); return; }
+    const minimum = parseFloat(minMonthlyPayment);
+    if (!Number.isFinite(minimum) || minimum <= 0) { setErr("Minimum payment per month must be greater than zero."); return; }
+    const price = parseFloat(plotPrice);
+    if (!Number.isFinite(price) || price <= 0) { setErr("Plot price must be greater than zero."); return; }
     setSaving(true); setErr("");
     try {
       await onSave(plot.id, {
@@ -226,8 +233,9 @@ function AssignPlotModal({
         loan_duration_months: payMode === "installment" ? duration : undefined,
         interest_type: payMode === "installment" ? intType : undefined,
         interest_amount: payMode === "installment" && intAmount ? parseFloat(intAmount) : undefined,
-        min_monthly_payment: payMode === "installment" && minMonthlyPayment ? parseFloat(minMonthlyPayment) : undefined,
+        min_monthly_payment: minimum,
         deadline: deadline || todayStr,
+        price,
       });
       onClose();
     } catch (e: any) { setErr(e.message); }
@@ -239,8 +247,8 @@ function AssignPlotModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "var(--border)" }}>
           <div>
-            <h2 className="font-bold text-base" style={{ color: "#1a202c" }}>Assign Plot</h2>
-            <p className="text-xs text-gray-400">Configure payment terms</p>
+            <h2 className="font-bold text-base" style={{ color: "#1a202c" }}>{isAssigned ? "Edit Plot Assignment" : "Assign Plot"}</h2>
+            <p className="text-xs text-gray-400">{isAssigned ? "Reassign the owner or update payment terms" : "Configure ownership and payment terms"}</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={16} /></button>
         </div>
@@ -248,8 +256,15 @@ function AssignPlotModal({
           <div>
             <p className="text-xs font-semibold text-gray-600 mb-2">Select Plot</p>
             <div className="border rounded-xl px-3 py-2.5 text-sm bg-gray-50" style={{ borderColor: "var(--border)" }}>
-              {plot.plot_number} — {plot.price > 0 ? fmtKESFull(Number(plot.price)) : "No price set"}
+              {plot.plot_number} · {projectName}
             </div>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Plot Price (KES)</label>
+            <input type="number" min={1} value={plotPrice} onChange={(e) => setPlotPrice(e.target.value)}
+              className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ borderColor: "var(--border)" }} />
+            <p className="text-xs text-gray-400 mt-0.5">Updates the price everywhere this plot is displayed.</p>
           </div>
           <div>
             <p className="text-xs font-semibold text-gray-600 mb-2">Assign To</p>
@@ -317,16 +332,16 @@ function AssignPlotModal({
                   className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
                   style={{ borderColor: "var(--border)" }} />
               </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Minimum Payment Per Month (KES)</label>
-                <input type="number" value={minMonthlyPayment} onChange={(e) => setMinMonthlyPayment(e.target.value)}
-                  placeholder="e.g. 10000"
-                  className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-                  style={{ borderColor: "var(--border)" }} />
-                <p className="text-xs text-gray-400 mt-0.5">Leave blank for no minimum on this plot</p>
-              </div>
             </>
           )}
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Minimum Payment Per Month (KES) <span className="text-red-500">*</span></label>
+            <input type="number" min={1} value={minMonthlyPayment} onChange={(e) => setMinMonthlyPayment(e.target.value)}
+              placeholder="e.g. 10000"
+              className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ borderColor: "var(--border)" }} />
+            <p className="text-xs text-gray-400 mt-0.5">The member must pay this amount or more before the monthly deadline.</p>
+          </div>
           <div>
             <label className="text-xs font-semibold text-gray-600">Payment Deadline</label>
             <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)}
@@ -336,11 +351,21 @@ function AssignPlotModal({
           </div>
           {err && <p className="text-xs text-red-500">{err}</p>}
         </div>
-        <div className="px-6 py-4 border-t" style={{ borderColor: "var(--border)" }}>
+        <div className="px-6 py-4 border-t flex gap-2" style={{ borderColor: "var(--border)" }}>
+          {isAssigned && (
+            <button onClick={async () => {
+              if (!window.confirm(`Unassign ${plot.plot_number}? Payment records will be kept.`)) return;
+              setSaving(true); setErr("");
+              try { await onUnassign(plot.id); onClose(); } catch (e: any) { setErr(e.message); } finally { setSaving(false); }
+            }} disabled={saving}
+              className="flex-1 py-3 rounded-xl text-sm font-bold border border-red-200 text-red-600 bg-red-50 disabled:opacity-60">
+              Unassign Plot
+            </button>
+          )}
           <button onClick={submit} disabled={saving}
-            className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-60"
+            className="flex-1 py-3 rounded-xl text-sm font-bold text-white disabled:opacity-60"
             style={{ background: "#1e2d4a" }}>
-            {saving ? "Assigning…" : "Assign Plot"}
+            {saving ? "Saving…" : isAssigned ? "Save Changes" : "Assign Plot"}
           </button>
         </div>
       </div>
@@ -1123,6 +1148,11 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
               const ord = day === 1 ? "1st" : day === 2 ? "2nd" : day === 3 ? "3rd" : `${day}th`;
               return <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#f97316" }}>Deadline: {ord} of every month</p>;
             })()}
+            {plot.min_monthly_payment != null && Number(plot.min_monthly_payment) > 0 && (
+              <p className="text-[11px] font-semibold mt-0.5 text-indigo-600">
+                Minimum per month: {fmtKESFull(Number(plot.min_monthly_payment))}
+              </p>
+            )}
           </div>
           <div className="text-right flex-shrink-0">
             <p className="font-bold text-sm" style={{ color: "#6366f1" }}>{fmtKESFull(price)}</p>
@@ -1141,11 +1171,6 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
                 Interest: <span className="font-semibold text-amber-600">
                   {plot.interest_type === "percentage" ? `${plot.interest_amount}%` : fmtKES(interestAmt)}
                 </span>
-              </span>
-            )}
-            {plot.min_monthly_payment && plot.min_monthly_payment > 0 && (
-              <span className="text-gray-400">
-                Min/mo: <span className="font-semibold text-indigo-600">{fmtKES(plot.min_monthly_payment)}</span>
               </span>
             )}
           </div>
@@ -3592,6 +3617,14 @@ function ProjectDetailView({
                                   })}
                                 </div>
                               )}
+                              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
+                                {p.min_monthly_payment != null && Number(p.min_monthly_payment) > 0 && (
+                                  <span className="font-semibold text-indigo-600">Min/month: {fmtKESFull(Number(p.min_monthly_payment))}</span>
+                                )}
+                                {p.deadline && (
+                                  <span className="font-semibold text-orange-600">Due by day {Number(p.deadline.split("-")[2] ?? 0)} monthly</span>
+                                )}
+                              </div>
                               <div className="h-1 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>
                                 <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "#22c55e" }} />
                               </div>
@@ -3626,10 +3659,10 @@ function ProjectDetailView({
                                   style={{ borderColor: "#e2e8f0", color: "#2563eb", background: "#eff6ff" }}>
                                   <Users size={11} /> Co-Own
                                 </button>
-                                <button onClick={() => handleUnassign(p.id)}
+                                <button onClick={() => setAssignTarget(p)}
                                   className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
                                   style={{ borderColor: "#e2e8f0", color: "#d97706", background: "#fffbeb" }}>
-                                  <RotateCcw size={11} /> Unassign
+                                  <Edit2 size={11} /> Edit Assignment
                                 </button>
                               </>
                             ) : (
@@ -3745,7 +3778,7 @@ function ProjectDetailView({
       {assignTarget && (
         <AssignPlotModal plot={assignTarget} projectName={project.project_name}
           shareholders={shareholders} clients={clients}
-          onClose={() => setAssignTarget(null)} onSave={handleAssign} />
+          onClose={() => setAssignTarget(null)} onSave={handleAssign} onUnassign={handleUnassign} />
       )}
       {addCoOwnerTarget && (
         <AddCoOwnerModal
