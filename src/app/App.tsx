@@ -3777,6 +3777,11 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const [monthlyPayments, setMonthlyPayments] = useState<Array<{ month: string; total: number }>>([]);
   const [plotsData, setPlotsData] = useState<Array<{ name: string; paid: number; remaining: number; pct: number }>>([]);
   const [thisMonthPlotPaid, setThisMonthPlotPaid] = useState(0);
+  const [monthlyPlotDues, setMonthlyPlotDues] = useState<Array<{
+    id: number; plotNumber: string; projectName: string; minimum: number;
+    deadline: string; paidBeforeDeadline: number; due: number;
+  }>>([]);
+  const [showMonthlyDues, setShowMonthlyDues] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<Array<{ name: string; value: number; color: string }>>([]);
   const [cumulativeSavings, setCumulativeSavings] = useState<Array<{ month: string; total: number }>>([]);
   const [reloadKey, setReloadKey] = useState(0);
@@ -3923,7 +3928,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       const now = new Date(); const { month, year } = getBillingPeriod(now);
       const [mRes, plotRes, payRes] = await Promise.all([
         supabase.from(mtype + "s").select(isSH ? "name, member_number, net_savings, photo_url" : "name, member_number, photo_url").eq("id", mid).maybeSingle(),
-        supabase.from("plots").select("id, plot_number, price, paid_amount, status").eq("assigned_to_id", mid).eq("assigned_to_type", mtype),
+        supabase.from("plots").select("id, plot_number, price, paid_amount, status, min_monthly_payment, loan_duration_months, deadline, project:projects(project_name)").eq("assigned_to_id", mid).eq("assigned_to_type", mtype),
         supabase.from("payments").select("id, amount, purpose, created_at, status").eq("member_id", mid).eq("member_type", mtype).order("created_at", { ascending: false }).limit(20),
       ]);
       if (mRes.data) setMemberInfo(mRes.data as any);
@@ -3973,7 +3978,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         const plotIds = plots.map((pl: any) => pl.id as number);
         const { data: allPmts } = await supabase
           .from("plot_payments")
-          .select("plot_id, amount")
+          .select("plot_id, amount, payment_date, created_at")
           .in("plot_id", plotIds);
         if (allPmts?.length) {
           // Tally totals per plot
@@ -3992,6 +3997,42 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         // "Total Paid" = sum of reconciled paid_amount across all plots
         const totalPaidPlots = plots.reduce((s: number, pl: any) => s + Number(pl.paid_amount ?? 0), 0);
         setThisMonthPlotPaid(totalPaidPlots);
+
+        // Current-month minimum due per plot. Only payments recorded in this
+        // month on or before the plot's recurring deadline count.
+        const nowDate = new Date();
+        const currentYear = nowDate.getFullYear();
+        const currentMonth = nowDate.getMonth();
+        const dues = plots.map((pl: any) => {
+          const price = Number(pl.price ?? 0);
+          const minimum = Number(pl.min_monthly_payment ?? 0) > 0
+            ? Number(pl.min_monthly_payment)
+            : price / Math.max(1, Number(pl.loan_duration_months ?? 12));
+          const deadlineDay = Math.max(1, Number(String(pl.deadline ?? "").split("-")[2] || 1));
+          const deadlineDate = new Date(currentYear, currentMonth, Math.min(deadlineDay, new Date(currentYear, currentMonth + 1, 0).getDate()), 23, 59, 59);
+          const paidBeforeDeadline = (allPmts ?? [])
+            .filter((payment: any) => Number(payment.plot_id) === Number(pl.id))
+            .reduce((sum: number, payment: any) => {
+              const rawDate = String(payment.payment_date ?? payment.created_at ?? "").slice(0, 10);
+              if (!rawDate) return sum;
+              const paymentDate = new Date(`${rawDate}T12:00:00`);
+              const inCurrentMonth = paymentDate.getFullYear() === currentYear && paymentDate.getMonth() === currentMonth;
+              return inCurrentMonth && paymentDate <= deadlineDate ? sum + Number(payment.amount) : sum;
+            }, 0);
+          return {
+            id: Number(pl.id),
+            plotNumber: pl.plot_number,
+            projectName: pl.project?.project_name ?? "—",
+            minimum,
+            deadline: deadlineDate.toISOString().slice(0, 10),
+            paidBeforeDeadline,
+            due: Math.max(0, minimum - paidBeforeDeadline),
+          };
+        });
+        setMonthlyPlotDues(dues);
+      } else {
+        setThisMonthPlotPaid(0);
+        setMonthlyPlotDues([]);
       }
 
       plots.slice(0, 2).forEach((pl: any) => acts.push({ key: "pl"+pl.id, type: "plot", label: "Plot allocated", amount: Number(pl.price), date: "" }));
@@ -4170,6 +4211,16 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 </div>
               );
             })()}
+            {(isSH || isCL) && (
+              <button onClick={() => setShowMonthlyDues(true)}
+                className="rounded-xl p-4 text-left hover:brightness-105 transition-all active:scale-[0.98]"
+                style={{ background: "#dc2626" }}>
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><Calendar size={17} color="white" /></div>
+                <div className="text-xl font-bold text-white">{fmtKESFull(monthlyPlotDues.reduce((sum, row) => sum + row.due, 0))}</div>
+                <div className="text-xs font-semibold text-white">Total Monthly Due</div>
+                <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Tap to view individual plots</div>
+              </button>
+            )}
           </>}
           {!stats && [0,1,2,3].map((i) => <div key={i} className="bg-white rounded-xl h-24 animate-pulse border" style={{ borderColor: "var(--card-border)" }} />)}
         </div>
@@ -4652,6 +4703,44 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 </>
               );
             })()}
+          </div>
+        </div>
+      </div>
+    )}
+    {showMonthlyDues && (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }}
+        onClick={(event) => { if (event.target === event.currentTarget) setShowMonthlyDues(false); }}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b" style={{ background: "#fef2f2", borderColor: "#fecaca" }}>
+            <div>
+              <p className="font-bold text-base text-red-950">Monthly Plot Dues</p>
+              <p className="text-xs text-red-500">Payments counted only when made before each plot deadline</p>
+            </div>
+            <button onClick={() => setShowMonthlyDues(false)} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-red-100"><X size={16} /></button>
+          </div>
+          <div className="max-h-[65vh] overflow-y-auto">
+            {monthlyPlotDues.length === 0 ? (
+              <p className="px-5 py-10 text-center text-sm text-gray-400">No assigned plots.</p>
+            ) : monthlyPlotDues.map((row) => (
+              <div key={row.id} className="px-5 py-3.5 border-b last:border-0" style={{ borderColor: "var(--border)" }}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">{row.plotNumber}</p>
+                    <p className="text-[11px] text-slate-400">{row.projectName} · Deadline {fmtDate(row.deadline)}</p>
+                  </div>
+                  <p className={`text-sm font-extrabold ${row.due > 0 ? "text-red-600" : "text-emerald-600"}`}>{fmtKESFull(row.due)}</p>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="block text-slate-400">Minimum</span><strong className="text-slate-700">{fmtKESFull(row.minimum)}</strong></div>
+                  <div className="rounded-lg bg-emerald-50 px-2 py-1.5"><span className="block text-emerald-500">Paid in time</span><strong className="text-emerald-700">{fmtKESFull(row.paidBeforeDeadline)}</strong></div>
+                  <div className="rounded-lg bg-red-50 px-2 py-1.5"><span className="block text-red-400">Due</span><strong className="text-red-700">{fmtKESFull(row.due)}</strong></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between px-5 py-4 border-t bg-red-50" style={{ borderColor: "#fecaca" }}>
+            <span className="text-sm font-bold text-red-950">Total Monthly Due</span>
+            <span className="text-lg font-extrabold text-red-700">{fmtKESFull(monthlyPlotDues.reduce((sum, row) => sum + row.due, 0))}</span>
           </div>
         </div>
       </div>

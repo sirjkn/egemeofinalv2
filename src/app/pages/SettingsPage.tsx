@@ -3347,6 +3347,7 @@ interface StaffAccount {
   id: string;
   full_name: string;
   email: string;
+  phone: string;
   role: "admin" | "reception";
   is_active: boolean;
   allowed_modules: string[] | null;
@@ -3354,7 +3355,7 @@ interface StaffAccount {
 }
 
 async function createStaffAccount(params: {
-  email: string; password: string; full_name: string;
+  email: string; phone: string; password: string; full_name: string;
   role: "admin" | "reception"; allowed_modules: string[] | null;
 }): Promise<void> {
   const { data: { session: adminSession } } = await supabase.auth.getSession();
@@ -3394,6 +3395,7 @@ async function createStaffAccount(params: {
   const profileRow: Record<string, any> = {
     id: userId, role: params.role, member_id: null,
     full_name: params.full_name, email: params.email,
+    phone: params.phone,
     is_active: true, password_changed: true,
   };
   if (params.allowed_modules) profileRow.allowed_modules = params.allowed_modules;
@@ -3404,13 +3406,14 @@ async function createStaffAccount(params: {
 }
 
 async function updateStaffAccount(params: {
-  id: string; full_name: string; email: string;
+  id: string; full_name: string; email: string; phone: string;
   role: "admin" | "reception"; allowed_modules: string[] | null;
   newPassword?: string;
 }): Promise<void> {
   const profileRow: Record<string, any> = {
     full_name: params.full_name,
     email: params.email,
+    phone: params.phone,
     role: params.role,
     allowed_modules: params.role === "reception" ? (params.allowed_modules ?? []) : null,
   };
@@ -3428,6 +3431,7 @@ function AddStaffModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   const [role, setRole]         = useState<"admin" | "reception">("reception");
   const [fullName, setFullName] = useState("");
   const [email, setEmail]       = useState("");
+  const [phone, setPhone]       = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw]     = useState(false);
   const [saving, setSaving]     = useState(false);
@@ -3437,11 +3441,13 @@ function AddStaffModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
     e.preventDefault();
     if (!fullName.trim()) { setErr("Enter a full name"); return; }
     if (!email.trim() || !email.includes("@")) { setErr("Enter a valid email address"); return; }
+    if (!phone.trim()) { setErr("Enter a staff phone number"); return; }
     if (password.length < 6) { setErr("Password must be at least 6 characters"); return; }
     setSaving(true); setErr("");
     try {
       await createStaffAccount({
         email: email.trim().toLowerCase(),
+        phone: phone.trim().replace(/[\s\-()]/g, ""),
         password,
         full_name: fullName.trim(),
         role,
@@ -3509,6 +3515,15 @@ function AddStaffModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
           </div>
 
           <div>
+            <label className="text-xs font-semibold text-gray-500 block mb-1">Phone Number</label>
+            <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+              placeholder="0712 345 678"
+              className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              style={{ borderColor: "#e2e8f0" }} />
+            <p className="text-[10px] text-gray-400 mt-1">Staff can use this phone number to sign in.</p>
+          </div>
+
+          <div>
             <label className="text-xs font-semibold text-gray-500 block mb-1">Password</label>
             <div className="relative">
               <input type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
@@ -3545,6 +3560,7 @@ function EditStaffModal({ account, onClose, onDone }: {
   const [role, setRole]         = useState<"admin" | "reception">(account.role);
   const [fullName, setFullName] = useState(account.full_name || "");
   const [email, setEmail]       = useState(account.email || "");
+  const [phone, setPhone]       = useState(account.phone || "");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw]     = useState(false);
   const [saving, setSaving]     = useState(false);
@@ -3554,6 +3570,7 @@ function EditStaffModal({ account, onClose, onDone }: {
     e.preventDefault();
     if (!fullName.trim()) { setErr("Enter a full name"); return; }
     if (!email.trim() || !email.includes("@")) { setErr("Enter a valid email address"); return; }
+    if (!phone.trim()) { setErr("Enter a staff phone number"); return; }
     if (password && password.length < 6) { setErr("New password must be at least 6 characters"); return; }
     setSaving(true); setErr("");
     try {
@@ -3561,6 +3578,7 @@ function EditStaffModal({ account, onClose, onDone }: {
         id: account.id,
         full_name: fullName.trim(),
         email: email.trim().toLowerCase(),
+        phone: phone.trim().replace(/[\s\-()]/g, ""),
         role,
         allowed_modules: null,
         newPassword: password || undefined,
@@ -3626,6 +3644,14 @@ function EditStaffModal({ account, onClose, onDone }: {
           </div>
 
           <div>
+            <label className="text-xs font-semibold text-gray-500 block mb-1">Phone Number</label>
+            <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+              placeholder="0712 345 678"
+              className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              style={{ borderColor: "#e2e8f0" }} />
+          </div>
+
+          <div>
             <label className="text-xs font-semibold text-gray-500 block mb-1">
               New Password <span className="font-normal text-gray-400">(leave blank to keep current)</span>
             </label>
@@ -3670,7 +3696,7 @@ function StaffAccountsCard() {
     try {
       const { data } = await supabase
         .from("user_profiles")
-        .select("id, full_name, email, role, is_active, allowed_modules, created_at")
+        .select("id, full_name, email, phone, role, is_active, allowed_modules, created_at")
         .in("role", ["admin", "reception"])
         .order("created_at", { ascending: false });
       setAccounts((data ?? []) as StaffAccount[]);
@@ -3762,7 +3788,7 @@ function StaffAccountsCard() {
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-400 flex-shrink-0">Inactive</span>
                           )}
                         </div>
-                        <p className="text-[10px] text-gray-400 truncate mt-0.5">{displayLogin}</p>
+                        <p className="text-[10px] text-gray-400 truncate mt-0.5">{displayLogin}{acc.phone ? ` · ${acc.phone}` : ""}</p>
                         {acc.role === "reception" && (
                           <p className="text-[10px] text-indigo-400 mt-0.5">Full access · no Settings</p>
                         )}

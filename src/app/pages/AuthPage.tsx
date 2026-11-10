@@ -108,7 +108,7 @@ async function findMemberByEmail(email: string): Promise<{
 type Step =
   | { kind: "identifier" }
   | { kind: "set-password";   email: string; name: string; role: "shareholder" | "client" | "investor"; memberId: number }
-  | { kind: "enter-password"; email: string; name: string; role: "admin" | "shareholder" | "client" | "investor"; displayIdentifier?: string }
+  | { kind: "enter-password"; email: string; name: string; role: "admin" | "reception" | "shareholder" | "client" | "investor"; displayIdentifier?: string }
   | { kind: "reset-otp";      email: string; phone: string; name: string };
 
 // ─── Brand panel ──────────────────────────────────────────────────────────────
@@ -268,14 +268,35 @@ function IdentifierStep({ onNext, company }: {
           throw new Error("Enter a valid phone number (e.g. 0712 345 678)");
         }
 
-        // 1. Look up in member tables first
+        // 1. Staff may also sign in using the phone stored on their staff profile.
         setStatus("Looking for your account…");
+        const variants = phoneVariants(value);
+        const { data: staffProfile } = await supabase
+          .from("user_profiles")
+          .select("full_name,role,is_active,email,phone")
+          .in("phone", variants)
+          .in("role", ["admin", "reception"])
+          .maybeSingle();
+        if (staffProfile) {
+          if (staffProfile.is_active === false)
+            throw new Error("This account has been deactivated. Contact your administrator.");
+          onNext({
+            kind: "enter-password",
+            email: staffProfile.email,
+            name: staffProfile.full_name || "",
+            role: staffProfile.role as "admin" | "reception",
+            displayIdentifier: value.trim(),
+          });
+          return;
+        }
+
+        // 2. Look up in member tables.
         const member = await findMemberByPhone(value);
         if (!member) {
           throw new Error("Phone number not registered. Contact your administrator.");
         }
 
-        // 2. Look up user_profiles — primary by member_id+role (role-scoped to avoid
+        // 3. Look up user_profiles — primary by member_id+role (role-scoped to avoid
         // cross-table ID collisions where a shareholder and client share the same
         // numeric member_id), fallback by derived phone email.
         const derivedEmail = phoneToEmail(value);

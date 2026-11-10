@@ -83,3 +83,10 @@ alter table public.lead_outreach_logs add column if not exists metadata jsonb no
 create index if not exists lead_outreach_logs_followup_at_idx
   on public.lead_outreach_logs (followup_at)
   where reminder_status = 'open';
+
+-- New Log Entry fields are optional; reporter/signature remain system-filled.
+alter table public.lead_outreach_logs alter column activity_type drop not null;
+alter table public.lead_outreach_logs alter column contact_id drop not null;
+alter table public.lead_outreach_logs alter column outcome drop not null;
+alter table public.lead_outreach_logs alter column status drop not null;
+alter table public.lead_outreach_logs add column if not exists signed_by text;
