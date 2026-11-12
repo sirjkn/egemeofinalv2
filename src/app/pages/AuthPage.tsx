@@ -245,8 +245,14 @@ function ErrorBox({ msg }: { msg: string }) {
 
 // ─── Step 1 — identifier ──────────────────────────────────────────────────────
 
-function IdentifierStep({ onNext, company }: {
+// Dev-only express login. Credentials come from .env.development.local, which
+// Vite loads only in dev mode, and the DEV check lets the build drop this code.
+const DEV_ADMIN_EMAIL    = import.meta.env.DEV ? (import.meta.env.VITE_DEV_ADMIN_EMAIL as string | undefined) : undefined;
+const DEV_ADMIN_PASSWORD = import.meta.env.DEV ? (import.meta.env.VITE_DEV_ADMIN_PASSWORD as string | undefined) : undefined;
+
+function IdentifierStep({ onNext, onLoggedIn, company }: {
   onNext: (step: Step) => void;
+  onLoggedIn: (session: any, profile: UserProfile) => void;
   company: CompanyDetails | null;
 }) {
   const [value, setValue]     = useState("");
@@ -254,6 +260,25 @@ function IdentifierStep({ onNext, company }: {
   const [status, setStatus]   = useState("");
   const [err, setErr]         = useState("");
   const isPhone = isPhoneInput(value);
+
+  const devAdminLogin = async () => {
+    if (!import.meta.env.DEV || !DEV_ADMIN_EMAIL || !DEV_ADMIN_PASSWORD) return;
+    setLoading(true); setErr(""); setStatus("Signing in as admin (dev)…");
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: DEV_ADMIN_EMAIL, password: DEV_ADMIN_PASSWORD,
+      });
+      if (error) throw new Error(error.message);
+      const profile = await fetchProfile(data.session!.user.id, DEV_ADMIN_EMAIL);
+      if (!profile) throw new Error("Admin profile not found.");
+      onLoggedIn(data.session, profile);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+      setStatus("");
+    }
+  };
 
   const next = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -438,6 +463,14 @@ function IdentifierStep({ onNext, company }: {
             {loading ? <Loader2 size={15} className="animate-spin" /> : null}
             {loading ? "Please wait…" : "Continue"}
           </button>
+
+          {import.meta.env.DEV && DEV_ADMIN_EMAIL && DEV_ADMIN_PASSWORD && (
+            <button type="button" onClick={devAdminLogin} disabled={loading}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold border border-dashed flex items-center justify-center gap-2 disabled:opacity-60 transition-colors hover:bg-amber-50"
+              style={{ color: "#b45309", borderColor: "#f59e0b" }}>
+              <KeyRound size={14} /> Admin Express Login (dev only)
+            </button>
+          )}
         </form>
 
         <div className="text-center mt-6 space-y-1.5">
@@ -965,7 +998,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: (session: any, profile: 
   useEffect(() => { getCompanyDetails().then(setCompany); }, []);
 
   if (step.kind === "identifier") {
-    return <IdentifierStep onNext={setStep} company={company} />;
+    return <IdentifierStep onNext={setStep} onLoggedIn={onLoggedIn} company={company} />;
   }
   if (step.kind === "set-password") {
     return (

@@ -65,14 +65,14 @@ const initialForm = () => ({
   date: "", time: "", activity: "", purpose: "",
   direction: "", result: "", onlineChannel: "", adReference: "",
   visitStage: "", followupOn: "", paymentType: "", amount: "",
-  contactMode: "existing" as "existing" | "new", contactKey: "", contactType: "",
+  contactMode: "existing" as "existing" | "new", contactKey: "", contactType: "", referralBy: "", referrerId: "", referrerName: "",
   fullName: "", phone: "", altPhone: "", email: "", area: "", leadSource: "",
   eventId: 0, referrer: "", projectId: 0, plotReference: "", budgetRange: "",
   paymentPreference: "", stage: "", status: "",
   outcome: "", lostReason: "", otherLostReason: "", notes: "",
   visitDate: "", visitTime: "", visitors: "", transport: "",
   pickupPoint: "", visitOutcome: "",
-  followupDate: "", followupTime: "", followupType: "",
+  followupDate: tomorrow(), followupTime: "", followupType: "",
   followupOther: "", anotherProjectId: 0, assignedTo: "", priority: "",
   remindVia: [] as string[], whatsappMessage: "", reportedBy: "", signedBy: "",
 });
@@ -121,7 +121,10 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
   const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [events, setEvents] = useState<{ id: number; name: string; date: string }[]>([]);
+  const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
   const [search, setSearch] = useState("");
+  const [referrerSearch, setReferrerSearch] = useState("");
+  const [currentUser, setCurrentUser] = useState<{ id: string; isAdmin: boolean }>({ id: "", isAdmin: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const set = (key: string, value: any) => setForm((current) => ({ ...current, [key]: value }));
@@ -135,7 +138,8 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
       supabase.from("shareholders").select("id,name,phone,email"),
       supabase.from("lead_events").select("id,name,date").order("date", { ascending: false }),
       supabase.from("user_profiles").select("id,full_name,role").order("full_name"),
-    ]).then(([leadRows, clientRows, memberRows, eventRows, userRows]) => {
+      supabase.auth.getUser(),
+    ]).then(([leadRows, clientRows, memberRows, eventRows, userRows, authRes]) => {
       const evs = (eventRows.data ?? []) as any[];
       setEvents(evs);
       const eventName = (id: number) => evs.find((event) => event.id === id);
@@ -164,8 +168,18 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
         id: row.id, label: `${row.full_name || "System User"} (${String(row.role || "User").replace(/^./, (c) => c.toUpperCase())})`,
       }));
       setUsers(nextUsers);
-      const defaultUser = nextUsers.find((user) => reporter.startsWith(user.label.split(" (")[0]));
-      if (defaultUser) set("assignedTo", defaultUser.id);
+      setStaff((userRows.data ?? [])
+        .filter((row: any) => ["admin", "reception"].includes(row.role))
+        .map((row: any) => ({ id: row.id, name: row.full_name || "System User", role: String(row.role).replace(/^./, (c) => c.toUpperCase()) })));
+      // Non-admins are always assigned to themselves; admins pick freely (left blank).
+      const authId = authRes.data.user?.id ?? "";
+      const me = (userRows.data ?? []).find((row: any) => row.id === authId);
+      const isAdmin = me?.role === "admin";
+      setCurrentUser({ id: authId, isAdmin });
+      if (!isAdmin && authId) {
+        set("assignedTo", authId);
+        if (!nextUsers.some((user) => user.id === authId)) setUsers([...nextUsers, { id: authId, label: reporter || "Me" }]);
+      }
     }).catch(() => {});
   }, [reporter]);
 
@@ -187,9 +201,21 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
     return matches && (form.activity !== "Event Lead" || !form.eventId || contact.eventId === form.eventId);
   }).slice(0, 8);
 
+  const referrerOptions = useMemo(() => {
+    const pool = form.referralBy === "Shareholder"
+      ? contacts.filter((c) => c.source === "MEMBER").map((c) => ({ id: String(c.id), name: c.name, sub: c.phone }))
+      : form.referralBy === "Client"
+      ? contacts.filter((c) => c.source === "CLIENT").map((c) => ({ id: String(c.id), name: c.name, sub: c.phone }))
+      : form.referralBy === "Staff"
+      ? staff.map((s) => ({ id: s.id, name: s.name, sub: s.role }))
+      : [];
+    const query = referrerSearch.toLowerCase();
+    return pool.filter((p) => `${p.name} ${p.sub}`.toLowerCase().includes(query)).slice(0, 8);
+  }, [form.referralBy, contacts, staff, referrerSearch]);
+
   const activityOptions = useMemo(() => {
     switch (form.activity) {
-      case "Call": return { label: "Purpose", values: ["Enquiry", "Booking", "Information", "Payment"] };
+      case "Call": return { label: "Purpose", values: ["Enquiry", "Booking", "Information", "Payment", "Follow Up"] };
       case "Office Visit": return { label: "Purpose", values: ["Enquiry", "Booking", "Payment", "Information", "Document collection"] };
       case "Online Enquiry": return { label: "Purpose", values: ["Enquiry", "Booking", "Information", "Payment", "Feedback"] };
       case "Customer Referral": return { label: "Purpose", values: ["Enquiry", "Booking", "Information"] };
@@ -225,6 +251,10 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
 
   async function save(keepOpen = false) {
     setError("");
+    if (showFollowup && form.followupDate && form.followupDate < tomorrow()) {
+      setError("Follow-up date must be tomorrow or later.");
+      return;
+    }
     setSaving(true);
     try {
       const contactId = await ensureLeadContact();
@@ -269,6 +299,9 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
           onlineChannel: form.onlineChannel, adReference: form.adReference, paymentType: form.paymentType,
           amount: form.amount, whatsappMessage: form.whatsappMessage, leadSource: form.leadSource,
           anotherProjectId: form.anotherProjectId || null,
+          referralBy: form.contactType === "Referral" ? form.referralBy || null : null,
+          referrerId: form.contactType === "Referral" ? form.referrerId || null : null,
+          referrerName: form.contactType === "Referral" ? form.referrerName || null : null,
         },
       });
       if (logError) throw logError;
@@ -278,7 +311,7 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
       }).eq("id", contactId);
       onSaved(keepOpen);
       if (keepOpen) {
-        setForm((current) => ({ ...initialForm(), date: current.date, reportedBy: current.reportedBy, signedBy: current.signedBy }));
+        setForm((current) => ({ ...initialForm(), date: current.date, reportedBy: current.reportedBy, signedBy: current.signedBy, assignedTo: currentUser.isAdmin ? "" : currentUser.id }));
         setSearch("");
       }
     } catch (err: any) {
@@ -299,7 +332,7 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
         <div><Label>Call Result</Label><select className={fieldClass} value={form.result} onChange={(e) => set("result", e.target.value)}>{["Answered", "No answer", "Busy", "Switched off", "Wrong number", "Call back later"].map((v) => <option key={v}>{v}</option>)}</select></div>
       </div>}
       {form.activity === "Customer Referral" && <div className="mb-3"><Label>Referred By</Label><input className={fieldClass} placeholder="Search member, client or agent" value={form.referrer} onChange={(e) => set("referrer", e.target.value)} /></div>}
-      {form.activity === "Site Visit" && <><Label>Visit Stage</Label><ChipGroup options={["Booking", "Taken to Site", "Feedback"]} value={form.visitStage} onChange={(v) => set("visitStage", v)} /></>}
+      {form.activity === "Site Visit" && <><Label>Visit Stage</Label><ChipGroup options={["Booking", "Taken to Site", "Feedback", "Information"]} value={form.visitStage} onChange={(v) => set("visitStage", v)} /></>}
       {form.activity === "Follow-up" && <><Label>Follow-up On</Label><ChipGroup options={["Lead", "Payment", "Customer (after-sale)"]} value={form.followupOn} onChange={(v) => set("followupOn", v)} /></>}
       {form.activity === "Event Lead" && <><Label>Event</Label><select className={fieldClass} value={form.eventId} onChange={(e) => set("eventId", Number(e.target.value))}><option value={0}>Select event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name} · {event.date}</option>)}</select></>}
       {form.activity === "Payment" && <div className="grid grid-cols-2 gap-3"><div><Label>Payment Type</Label><select className={fieldClass} value={form.paymentType} onChange={(e) => set("paymentType", e.target.value)}>{["Deposit", "Instalment", "Full payment", "Refund request"].map((v) => <option key={v}>{v}</option>)}</select></div><div><Label>Amount (KES)</Label><input type="number" className={fieldClass} value={form.amount} onChange={(e) => set("amount", e.target.value)} placeholder="Optional" /></div></div>}
@@ -368,7 +401,19 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
                 <div className="col-span-2"><Label>Lead Source</Label><select className={fieldClass} value={form.leadSource} onChange={(e) => set("leadSource", e.target.value)}><option value="">Select source</option>{["Event", "Walk-in", "Call-in", "WhatsApp", "Facebook", "Website", "Referral", "Other"].map((v) => <option key={v}>{v}</option>)}</select></div>
                 {form.leadSource === "Event" && <div className="col-span-2"><Label>Event</Label><select className={fieldClass} value={form.eventId} onChange={(e) => set("eventId", Number(e.target.value))}><option value={0}>Select event</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select></div>}
               </div>}
-              <div className="mt-3"><Label>Contact Type</Label><select className={fieldClass} value={form.contactType} onChange={(e) => set("contactType", e.target.value)}>{["Prospect", "Client", "Member/Shareholder", "Agent"].map((v) => <option key={v}>{v}</option>)}</select></div>
+              <div className="mt-3"><Label>Contact Type</Label><select className={fieldClass} value={form.contactType} onChange={(e) => set("contactType", e.target.value)}>{["Prospect", "Client", "Member/Shareholder", "Agent", "Referral"].map((v) => <option key={v}>{v}</option>)}</select></div>
+              {form.contactType === "Referral" && <div className="mt-3 grid grid-cols-2 gap-3">
+                <div><Label>Referred By</Label><select className={fieldClass} value={form.referralBy} onChange={(e) => { setForm((current) => ({ ...current, referralBy: e.target.value, referrerId: "", referrerName: "" })); setReferrerSearch(""); }}><option value="">Select referrer type</option>{["Shareholder", "Client", "Staff"].map((v) => <option key={v}>{v}</option>)}</select></div>
+                {form.referralBy && <div className="relative"><Label>{form.referralBy} Name</Label>
+                  {form.referrerId
+                    ? <div className="flex h-10 items-center justify-between rounded-lg border border-violet-300 bg-violet-50 px-3"><span className="truncate text-xs font-bold text-violet-800">{form.referrerName}</span><button type="button" onClick={() => setForm((current) => ({ ...current, referrerId: "", referrerName: "" }))} className="text-[10px] font-bold text-violet-700">Change</button></div>
+                    : <><div className="relative"><Search size={14} className="absolute left-3 top-3 text-slate-400" /><input className={`${fieldClass} pl-9`} value={referrerSearch} onChange={(e) => setReferrerSearch(e.target.value)} placeholder={`Search ${form.referralBy.toLowerCase()}…`} /></div>
+                      {referrerSearch && <div className="absolute z-20 mt-1 max-h-44 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                        {referrerOptions.length === 0 && <p className="px-3 py-2.5 text-[11px] text-slate-400">No matches</p>}
+                        {referrerOptions.map((option) => <button type="button" key={option.id} onClick={() => { setForm((current) => ({ ...current, referrerId: option.id, referrerName: option.name })); setReferrerSearch(""); }} className="block w-full border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50"><p className="text-xs font-bold text-slate-800">{option.name}</p>{option.sub && <p className="text-[10px] text-slate-500">{option.sub}</p>}</button>)}
+                      </div>}</>}
+                </div>}
+              </div>}
             </div>
 
             <div className="p-5">
@@ -379,8 +424,8 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
                 <div><Label>Budget Range</Label><select className={fieldClass} value={form.budgetRange} onChange={(e) => set("budgetRange", e.target.value)}>{["Below 500K", "500K-1M", "1M-2M", "2M-5M", "Above 5M", "Not shared"].map((v) => <option key={v}>{v}</option>)}</select></div>
                 <div><Label>Payment Preference</Label><select className={fieldClass} value={form.paymentPreference} onChange={(e) => set("paymentPreference", e.target.value)}>{["Cash", "Instalments 6 mo", "12 mo", "24 mo", "Not decided"].map((v) => <option key={v}>{v}</option>)}</select></div>
               </div>
-              <div className="mt-4"><Label>Pipeline Stage</Label><div className="grid grid-cols-4 overflow-hidden rounded-lg bg-slate-100">{STAGES.map((stage) => <button type="button" key={stage} onClick={() => set("stage", stage)} className={`relative px-2 py-2 text-[9px] font-bold transition ${form.stage === stage ? "bg-violet-600 text-white" : "text-slate-500 hover:bg-slate-200"}`}>{stage}</button>)}</div></div>
-              <div className="mt-4"><Label>Status of this interaction</Label><div className="flex flex-wrap gap-1.5">{STATUS.map((status) => <button type="button" key={status} onClick={() => set("status", status)} className={`rounded-md border px-3 py-2 text-[10px] font-bold ${form.status === status ? status === "Not Interested" ? "border-red-500 bg-red-50 text-red-700" : "border-violet-600 bg-violet-50 text-violet-700" : "border-slate-200 text-slate-500"}`}>{status}</button>)}</div></div>
+              <div className="mt-4 grid grid-cols-2 gap-3"><div><Label>Pipeline Stage</Label><select className={fieldClass} value={form.stage} onChange={(e) => set("stage", e.target.value)}><option value="">Select stage</option>{STAGES.map((stage) => <option key={stage} value={stage}>{stage}</option>)}</select></div>
+              <div><Label>Status of this interaction</Label><select className={`${fieldClass} ${form.status === "Not Interested" ? "border-red-400 text-red-700" : ""}`} value={form.status} onChange={(e) => set("status", e.target.value)}><option value="">Select status</option>{STATUS.map((status) => <option key={status} value={status}>{status}</option>)}</select></div></div>
               <div className="mt-4"><Label>Outcome / Next Step</Label><input className={`${fieldClass} focus:border-violet-600`} value={form.outcome} onChange={(e) => set("outcome", e.target.value)} placeholder="e.g. Booked site visit Sat" /></div>
               {(form.status === "Not Interested" || form.stage === "Lost / Dead") && <div className="mt-3"><Label>Lost Reason</Label><select className={fieldClass} value={form.lostReason} onChange={(e) => set("lostReason", e.target.value)}><option value="">Select reason</option>{["Budget", "Location", "Timing", "Bought elsewhere", "No response", "Other"].map((v) => <option key={v}>{v}</option>)}</select>{form.lostReason === "Other" && <input className={`${fieldClass} mt-2`} value={form.otherLostReason} onChange={(e) => set("otherLostReason", e.target.value)} placeholder="Type reason" />}</div>}
               <div className="mt-4"><div className="flex justify-between"><Label>Details / Notes</Label><span className="text-[9px] text-slate-400">{form.notes.length} / 500</span></div><textarea rows={5} maxLength={500} className="w-full resize-none rounded-lg border border-slate-200 p-3 text-xs outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Type freely…" /></div>
@@ -402,10 +447,10 @@ export function OutreachEntryModal({ projects, reporter, onClose, onSaved }: Pro
               {showFollowup && <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
                 <SectionTitle number={5} title="Follow-up & Reminder" note="REQUIRED UNLESS CONVERTED / LOST" color="amber" />
                 <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Follow-up Date</Label><input type="date" className={fieldClass} value={form.followupDate} onChange={(e) => set("followupDate", e.target.value)} /></div>
+                  <div><Label>Follow-up Date</Label><input type="date" min={tomorrow()} className={fieldClass} value={form.followupDate} onChange={(e) => set("followupDate", e.target.value)} /></div>
                   <div><Label>Time</Label><input type="time" className={fieldClass} value={form.followupTime} onChange={(e) => set("followupTime", e.target.value)} /></div>
                   <div><Label>Follow-up Type</Label><select className={fieldClass} value={form.followupType} onChange={(e) => set("followupType", e.target.value)}><option value="">Select follow-up type</option>{["Call back", "Send prices / brochure", "Confirm site visit", "Book site visit", "Office meeting", "Interest in another project", "Payment follow-up", "Document / title follow-up", "Other"].map((v) => <option key={v}>{v}</option>)}</select></div>
-                  <div><Label>Assign To</Label><select className={fieldClass} value={form.assignedTo} onChange={(e) => set("assignedTo", e.target.value)}><option value="">Select user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.label}</option>)}</select></div>
+                  <div><Label>Assign To</Label><select className={`${fieldClass} disabled:bg-slate-50 disabled:text-slate-500`} disabled={!currentUser.isAdmin} value={form.assignedTo} onChange={(e) => set("assignedTo", e.target.value)}><option value="">Select user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.label}</option>)}</select></div>
                   {form.followupType === "Interest in another project" && <div className="col-span-2"><Label>Project</Label><select className={fieldClass} value={form.anotherProjectId} onChange={(e) => set("anotherProjectId", Number(e.target.value))}><option value={0}>Select another project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></div>}
                   {form.followupType === "Other" && <div className="col-span-2"><Label>Follow-up action</Label><input className={fieldClass} value={form.followupOther} onChange={(e) => set("followupOther", e.target.value)} /></div>}
                 </div>
