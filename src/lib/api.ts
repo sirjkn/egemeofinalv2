@@ -1373,6 +1373,58 @@ export const profitDistributionsApi = {
     if (error) throw new Error(error.message);
   },
 
+  /**
+   * Set one member's total allocation for a project to `amount`.
+   * Reuses the first existing row (removing any extras), inserts one if none exist,
+   * deletes all rows if amount is 0, and adjusts total_profits by the difference.
+   */
+  setAllocation: async (
+    project_id: number,
+    who: { shareholder_id: number } | { investor_id: number },
+    amount: number,
+    distributed_at: string,
+    notes?: string,
+  ): Promise<void> => {
+    const isInvestor = "investor_id" in who;
+    const col = isInvestor ? "investor_id" : "shareholder_id";
+    const personId = isInvestor ? who.investor_id : who.shareholder_id;
+
+    let query = supabase.from("profit_distributions").select("id,amount").eq("project_id", project_id).eq(col, personId);
+    if (!isInvestor) query = query.is("investor_id", null);
+    const { data: existing, error: fetchErr } = await query.order("id");
+    if (fetchErr) throw new Error(fetchErr.message);
+    const rows = existing ?? [];
+    const oldSum = rows.reduce((s, r: any) => s + Number(r.amount), 0);
+
+    if (amount <= 0) {
+      if (rows.length) {
+        const { error } = await supabase.from("profit_distributions").delete().in("id", rows.map((r: any) => r.id));
+        if (error) throw new Error(error.message);
+      }
+    } else if (rows.length === 0) {
+      const { error } = await supabase.from("profit_distributions").insert({
+        project_id, [col]: personId, amount, distributed_at, ...(notes ? { notes } : {}),
+      });
+      if (error) throw new Error(error.message);
+    } else {
+      const [keep, ...extras] = rows as any[];
+      const { error } = await supabase.from("profit_distributions")
+        .update({ amount, distributed_at, ...(notes ? { notes } : {}) }).eq("id", keep.id);
+      if (error) throw new Error(error.message);
+      if (extras.length) {
+        const { error: delErr } = await supabase.from("profit_distributions").delete().in("id", extras.map((r) => r.id));
+        if (delErr) throw new Error(delErr.message);
+      }
+    }
+
+    const delta = Math.max(0, amount) - oldSum;
+    if (delta !== 0) {
+      const table = isInvestor ? "investors" : "shareholders";
+      const { data: p } = await supabase.from(table).select("total_profits").eq("id", personId).single();
+      if (p) await supabase.from(table).update({ total_profits: Math.max(0, Number((p as any).total_profits ?? 0) + delta) }).eq("id", personId);
+    }
+  },
+
   removeByShareholderAndProject: async (project_id: number, shareholder_id: number): Promise<void> => {
     await supabase.from("profit_distributions")
       .delete().eq("project_id", project_id).eq("shareholder_id", shareholder_id);

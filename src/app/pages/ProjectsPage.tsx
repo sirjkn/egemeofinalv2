@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   FolderOpen, MapPin, Plus, Search, X, ArrowLeft,
@@ -2179,71 +2179,100 @@ function DistributeProfitModal({ project, enrolled, investors, distributions, on
   onDone: () => void;
 }) {
   const totalDistributed = distributions.reduce((s, d) => s + Number(d.amount), 0);
-  const remaining = Math.max(0, Number(project.net_profit) - totalDistributed);
+  const netProfit = Number(project.net_profit);
 
   const today = new Date().toISOString().split("T")[0];
+
+  // Existing allocation per row key: summed amount + most recent date.
+  const existingByKey = useMemo(() => {
+    const map: Record<string, { amount: number; date: string }> = {};
+    for (const d of distributions) {
+      const key = d.investor_id ? `inv_${d.investor_id}` : d.shareholder_id ? `sh_${d.shareholder_id}` : null;
+      if (!key) continue;
+      const date = String(d.distributed_at ?? "").slice(0, 10);
+      const cur = map[key] ?? { amount: 0, date: "" };
+      map[key] = { amount: cur.amount + Number(d.amount), date: date > cur.date ? date : cur.date };
+    }
+    return map;
+  }, [distributions]);
+
+  const rowKeys = useMemo(() => [
+    ...enrolled.map((e) => `sh_${e.shareholder_id}`),
+    ...investors.map((inv) => `inv_${inv.investor_id}`),
+  ], [enrolled, investors]);
+
+  // Allocations for people no longer listed in the modal still count toward the profit cap.
+  const otherDistributed = useMemo(() => Object.entries(existingByKey)
+    .filter(([key]) => !rowKeys.includes(key))
+    .reduce((s, [, v]) => s + v.amount, 0), [existingByKey, rowKeys]);
+
   const [masterDate, setMasterDate] = useState(today);
   const [notes, setNotes] = useState("");
   const [amounts, setAmounts] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    enrolled.forEach((e) => { init[`sh_${e.shareholder_id}`] = ""; });
-    investors.forEach((inv) => { init[`inv_${inv.investor_id}`] = ""; });
+    rowKeys.forEach((key) => { init[key] = existingByKey[key] ? String(existingByKey[key].amount) : ""; });
     return init;
   });
   const [rowDates, setRowDates] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    enrolled.forEach((e) => { init[`sh_${e.shareholder_id}`] = today; });
-    investors.forEach((inv) => { init[`inv_${inv.investor_id}`] = today; });
+    rowKeys.forEach((key) => { init[key] = existingByKey[key]?.date || today; });
     return init;
   });
   const [saving, setSaving] = useState(false);
-  const [applyingDates, setApplyingDates] = useState(false);
   const [err, setErr] = useState("");
 
-  const applyMasterDate = async () => {
+  // Fills every row's date in the form; nothing is saved until the user clicks Save.
+  const applyMasterDate = () => {
+    if (!masterDate) return;
     setErr("");
     setRowDates((prev) => {
       const next = { ...prev };
       Object.keys(next).forEach((k) => { next[k] = masterDate; });
       return next;
     });
-    if (!masterDate || distributions.length === 0) return;
-    setApplyingDates(true);
-    try {
-      await Promise.all(distributions.map((d) => profitDistributionsApi.update(d.id, { distributed_at: masterDate })));
-      onDone();
-    } catch {
-      // silently ignore — dates still set in form state
-    } finally {
-      setApplyingDates(false);
-    }
   };
 
-  const totalEntering = Object.values(amounts).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const totalEntering = rowKeys.reduce((s, key) => s + (parseFloat(amounts[key] || "0") || 0), 0);
+  const totalAfterSave = totalEntering + otherDistributed;
+  const remaining = netProfit - totalAfterSave;
+  const overLimit = totalAfterSave > netProfit;
+
+  const amountOf = (key: string) => parseFloat(amounts[key] || "0") || 0;
+  // Amount changed (or a new allocation) → rewrite the allocation.
+  const amountChangedKeys = rowKeys.filter((key) => {
+    const prev = existingByKey[key];
+    return prev ? amountOf(key) !== prev.amount : amountOf(key) > 0;
+  });
+  // Amount unchanged but date moved → only update the date on the existing rows.
+  const dateOnlyKeys = rowKeys.filter((key) => {
+    const prev = existingByKey[key];
+    return !!prev && prev.amount > 0 && amountOf(key) === prev.amount && (rowDates[key] || today) !== prev.date;
+  });
+  const changedKeys = [...amountChangedKeys, ...dateOnlyKeys];
+
+  const rowIdsFor = (key: string) => distributions
+    .filter((d) => key.startsWith("inv_") ? `inv_${d.investor_id}` === key : !d.investor_id && `sh_${d.shareholder_id}` === key)
+    .map((d) => d.id);
 
   const submit = async () => {
-    const shRows = enrolled
-      .map((e) => {
-        const key = `sh_${e.shareholder_id}`;
-        return { project_id: project.id, shareholder_id: e.shareholder_id, amount: parseFloat(amounts[key] || "0") || 0, distributed_at: rowDates[key] || today, notes: notes.trim() || undefined };
-      })
-      .filter((r) => r.amount > 0);
-    const invRows = investors
-      .map((inv) => {
-        const key = `inv_${inv.investor_id}`;
-        return { project_id: project.id, investor_id: inv.investor_id, amount: parseFloat(amounts[key] || "0") || 0, distributed_at: rowDates[key] || today, notes: notes.trim() || undefined };
-      })
-      .filter((r) => r.amount > 0);
-    const rows = [...shRows, ...invRows] as any[];
-    if (!rows.length) { setErr("Enter at least one amount greater than 0."); return; }
+    if (!changedKeys.length) { setErr("No changes to save."); return; }
+    if (overLimit) { setErr("Total allocated exceeds the project profit."); return; }
     setSaving(true); setErr("");
     try {
-      await profitDistributionsApi.create(rows);
-      logActivity({ category: "project", action: "create", description: `Profit distributed for project "${project.project_name}" — ${rows.length} allocation${rows.length !== 1 ? "s" : ""}`, meta: { project_id: project.id } });
+      for (const key of amountChangedKeys) {
+        const id = Number(key.split("_")[1]);
+        const who = key.startsWith("inv_") ? { investor_id: id } : { shareholder_id: id };
+        await profitDistributionsApi.setAllocation(project.id, who, amountOf(key), rowDates[key] || today, notes.trim() || undefined);
+      }
+      for (const key of dateOnlyKeys) {
+        await Promise.all(rowIdsFor(key).map((rowId) => profitDistributionsApi.update(rowId, { distributed_at: rowDates[key] || today })));
+      }
+      logActivity({ category: "project", action: "update", description: `Profit distribution updated for project "${project.project_name}" — ${changedKeys.length} allocation${changedKeys.length !== 1 ? "s" : ""} changed`, meta: { project_id: project.id } });
       onDone();
       onClose();
     } catch (e: any) {
-      setErr(e.message?.includes("does not exist") ? "Run the profit_distributions SQL migration first." : (e.message ?? "Failed to distribute"));
+      setErr(e.message?.includes("does not exist") ? "Run the profit_distributions SQL migration first." : (e.message ?? "Failed to save distribution"));
+      onDone();
     } finally { setSaving(false); }
   };
 
@@ -2264,7 +2293,7 @@ function DistributeProfitModal({ project, enrolled, investors, distributions, on
               {[
                 { label: !project.date_completed ? "ESTIMATED PROFIT" : "TOTAL PROFIT", value: fmtKESFull(Number(project.net_profit)), bg: !project.date_completed ? "linear-gradient(135deg,#fee2e2,#fecaca)" : "linear-gradient(135deg,#dcfce7,#bbf7d0)", color: !project.date_completed ? "#b91c1c" : "#15803d", border: !project.date_completed ? "#fca5a5" : "#86efac" },
                 { label: !project.date_completed ? "ESTIMATED DISTRIBUTED" : "DISTRIBUTED", value: fmtKESFull(totalDistributed), bg: "linear-gradient(135deg,#fef9c3,#fde68a)", color: "#92400e", border: "#fbbf24" },
-                { label: "REMAINING", value: fmtKES(remaining), bg: "linear-gradient(135deg,#dbeafe,#bfdbfe)", color: "#1d4ed8", border: "#93c5fd" },
+                { label: "REMAINING", value: fmtKES(remaining), bg: remaining < 0 ? "linear-gradient(135deg,#fee2e2,#fecaca)" : "linear-gradient(135deg,#dbeafe,#bfdbfe)", color: remaining < 0 ? "#b91c1c" : "#1d4ed8", border: remaining < 0 ? "#fca5a5" : "#93c5fd" },
               ].map((s: any) => (
                 <div key={s.label} className="rounded-xl border px-3 py-2.5 text-center" style={{ background: s.bg, borderColor: s.border }}>
                   <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5" style={{ color: s.color }}>{s.label}</div>
@@ -2281,11 +2310,11 @@ function DistributeProfitModal({ project, enrolled, investors, distributions, on
                   <input type="date" value={masterDate} onChange={(e) => { setMasterDate(e.target.value); setErr(""); }}
                     className="flex-1 border rounded-xl px-3 py-2 text-sm focus:outline-none"
                     style={{ borderColor: "var(--border)" }} />
-                  <button onClick={applyMasterDate} disabled={applyingDates}
-                    className="px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex-shrink-0 disabled:opacity-60"
+                  <button onClick={applyMasterDate}
+                    className="px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex-shrink-0"
                     style={{ background: "#eef2ff", color: "#6366f1", border: "1px solid #c7d2fe" }}
-                    title="Apply this date to all rows and save existing distributions">
-                    {applyingDates ? "Saving…" : "Apply All"}
+                    title="Set this date on every row (saved when you click Save)">
+                    Apply All
                   </button>
                 </div>
               </div>
@@ -2371,27 +2400,20 @@ function DistributeProfitModal({ project, enrolled, investors, distributions, on
         </div>
 
         <div className="px-6 py-4 border-t flex-shrink-0 space-y-2" style={{ borderColor: "var(--border)" }}>
-          {totalEntering > 0 && (
-            <div className="flex justify-between items-center px-1">
-              <span className="text-xs text-gray-500">Total to distribute</span>
-              <span className="text-sm font-bold text-green-600">{fmtKESFull(totalEntering)}</span>
-            </div>
-          )}
+          <div className="flex justify-between items-center px-1">
+            <span className="text-xs text-gray-500">Total allocated{changedKeys.length > 0 ? ` · ${changedKeys.length} change${changedKeys.length !== 1 ? "s" : ""}` : ""}</span>
+            <span className="text-sm font-bold text-green-600">{fmtKESFull(totalAfterSave)}</span>
+          </div>
           {err && <p className="text-xs text-red-500 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
-          {remaining <= 0 && (
+          {overLimit && (
             <p className="text-xs font-semibold text-center px-3 py-2 rounded-lg" style={{ background: "#fef2f2", color: "#dc2626" }}>
-              No remaining profit to distribute.
+              Total allocated ({fmtKESFull(totalAfterSave)}) exceeds project profit ({fmtKESFull(netProfit)}).
             </p>
           )}
-          {totalEntering > remaining && remaining > 0 && (
-            <p className="text-xs font-semibold text-center px-3 py-2 rounded-lg" style={{ background: "#fef2f2", color: "#dc2626" }}>
-              Total entered ({fmtKESFull(totalEntering)}) exceeds remaining ({fmtKESFull(remaining)}).
-            </p>
-          )}
-          <button onClick={submit} disabled={saving || enrolled.length === 0 || remaining <= 0 || totalEntering > remaining}
+          <button onClick={submit} disabled={saving || rowKeys.length === 0 || overLimit || changedKeys.length === 0}
             className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ background: "#22c55e" }}>
-            {saving ? "Distributing…" : "Confirm Distribution"}
+            {saving ? "Saving…" : totalDistributed > 0 ? "Save Distribution" : "Confirm Distribution"}
           </button>
         </div>
       </div>
