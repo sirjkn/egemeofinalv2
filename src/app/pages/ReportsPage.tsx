@@ -198,8 +198,8 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
               const inMonth = paymentDate.getFullYear() === period.year && paymentDate.getMonth() === period.month;
               return inMonth && paymentDate <= deadlineDate ? sum + Number(payment.amount) : sum;
             }, 0);
-            const due = Math.max(0, minimumDue - paidBeforeDeadline);
             const balance = Math.max(0, price - allTimePaid);
+            const due = Math.min(balance, Math.max(0, minimumDue - paidBeforeDeadline));
             return {
               ...plot,
               shareholder: member,
