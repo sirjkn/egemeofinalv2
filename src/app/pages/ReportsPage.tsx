@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   BarChart2, Link2, CreditCard, RotateCcw, Users, UserCircle2,
-  Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp, AlertTriangle,
+  Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp, AlertTriangle, ListOrdered,
 } from "lucide-react";
 import {
   contributionsApi, paymentsApi, shareholdersApi, clientsApi, refundsApi,
@@ -17,11 +17,12 @@ import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
 import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 
-type ReportSub = "contributions" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits" | "debtors";
+type ReportSub = "contributions" | "contributionsList" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits" | "debtors";
 
 const REPORT_META: Record<ReportSub, { label: string; desc: string; color: string; bg: string; icon: React.ReactNode }> = {
   summary:       { label: "Annual Summary",       desc: "Membership, contributions & payments overview", color: "#1e2d4a", bg: "#eef2ff", icon: <BarChart2 size={22} /> },
   contributions: { label: "Contributions Report", desc: "All monthly contributions with status",         color: "#6366f1", bg: "#eef2ff", icon: <Link2 size={22} /> },
+  contributionsList: { label: "Contributions List", desc: "Total contributed per member for a date range",   color: "#4f46e5", bg: "#eef2ff", icon: <ListOrdered size={22} /> },
   payments:      { label: "Payments Report",       desc: "All payments with mode and purpose",           color: "#14b8a6", bg: "#f0fdfa", icon: <CreditCard size={22} /> },
   refunds:       { label: "Refunds Report",        desc: "All processed refunds",                        color: "#ef4444", bg: "#fef2f2", icon: <RotateCcw size={22} /> },
   shareholders:  { label: "Shareholders List",     desc: "All shareholders with savings",                color: "#6366f1", bg: "#eef2ff", icon: <Users size={22} /> },
@@ -82,6 +83,9 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
 
   // ── contributions-specific filter state ─────────────────────────────────
   const [contribStatusF, setContribStatusF] = useState<"all" | "paid" | "unpaid">("all");
+
+  // ── contributions-list filter state (Active by default) ─────────────────
+  const [listStatusF, setListStatusF] = useState<"Active" | "Inactive" | "">("Active");
 
   // ── profits-specific filter state ────────────────────────────────────────
   const [projectF,  setProjectF]  = useState("");
@@ -310,6 +314,43 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           setRows(allRows);
         }
 
+      } else if (type === "contributionsList") {
+        // One row per shareholder: total contributed within the date range.
+        // Contributions are paged because Supabase caps a single response at 1000 rows.
+        const members = await shareholdersApi.list({ status: listStatusF || undefined });
+        const contribs: any[] = [];
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await supabase
+            .from("contributions")
+            .select("shareholder_id,amount,payment_date,year,month")
+            .order("id")
+            .range(from, from + PAGE - 1);
+          if (error) throw new Error(error.message);
+          contribs.push(...(data ?? []));
+          if (!data || data.length < PAGE) break;
+        }
+        const totals = new Map<number, { amount: number; count: number }>();
+        for (const c of contribs) {
+          // Use the date paid; fall back to the billing month when no payment date was recorded.
+          const day = c.payment_date
+            ? String(c.payment_date).slice(0, 10)
+            : `${c.year}-${String(c.month).padStart(2, "0")}-01`;
+          if (dateFrom && day < dateFrom) continue;
+          if (dateTo && day > dateTo) continue;
+          const id = Number(c.shareholder_id);
+          const cur = totals.get(id) ?? { amount: 0, count: 0 };
+          totals.set(id, { amount: cur.amount + Number(c.amount), count: cur.count + 1 });
+        }
+        setRows(members.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          member_number: m.member_number,
+          status: m.status,
+          amount: totals.get(m.id)?.amount ?? 0,
+          count: totals.get(m.id)?.count ?? 0,
+        })));
+
       } else if (type === "payments") {
         const data = await paymentsApi.list({
           year:    yearF === "all" ? undefined : yearF,
@@ -349,7 +390,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       }
     } catch { setRows([]); }
     finally { setLoading(false); }
-  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, projectF, contribStatusF, shareholderF, memberTypeF, plotF, shareholders, debtorClients, projects]);
+  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, shareholders, debtorClients, projects]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -384,11 +425,12 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   }, [type, load]);
 
   // ── search filter applied in-memory for member lists ────────────────────
-  const filtered = (type === "contributions" || type === "payments" || type === "refunds" || type === "profits" || type === "debtors")
+  const filtered = (type === "contributions" || type === "contributionsList" || type === "payments" || type === "refunds" || type === "profits" || type === "debtors")
     ? rows.filter((r) => {
         if (!search) return true;
         const q = search.toLowerCase();
         if (type === "contributions") return r.shareholder?.name.toLowerCase().includes(q) || `EW#${r.shareholder?.member_number}`.includes(q);
+        if (type === "contributionsList") return (r.name ?? "").toLowerCase().includes(q) || `ew#${r.member_number}`.includes(q) || String(r.member_number).includes(q);
         if (type === "payments") return r.paid_by?.toLowerCase().includes(q) || (r.payment_id ?? "").toLowerCase().includes(q) || r.purpose?.toLowerCase().includes(q);
         if (type === "refunds") return r.shareholder?.name?.toLowerCase().includes(q) || `EW#${r.shareholder?.member_number}`.includes(q);
         if (type === "profits") {
@@ -409,8 +451,9 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     try {
       const co = await getCompanyDetails();
       const filterStr = [
-        yearF !== "all" && `Year: ${yearF}`,
-        monthF !== "all" && `Month: ${MONTHS[(monthF as number) - 1]}`,
+        type !== "contributionsList" && yearF !== "all" && `Year: ${yearF}`,
+        type !== "contributionsList" && monthF !== "all" && `Month: ${MONTHS[(monthF as number) - 1]}`,
+        type === "contributionsList" && `Members: ${listStatusF || "All"}`,
         modeF    && `Mode: ${modeF}`,
         purposeF && `Purpose: ${purposeF}`,
         statusF  && `Status: ${statusF}`,
@@ -441,6 +484,14 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           ]),
           total: totalDebt,
         }], "Debtors Report", co, filterStr);
+
+      } else if (type === "contributionsList") {
+        downloadReportPdf([{
+          title: "Contributions List",
+          headers: ["#", "Member Name", "EW No.", "Amount (KES)"],
+          rows: filtered.map((r: any, i: number) => [String(i + 1), r.name, `EW#${r.member_number}`, Number(r.amount).toLocaleString("en-KE")]),
+          total: filtered.reduce((s: number, r: any) => s + Number(r.amount), 0),
+        }], "Contributions List", co, filterStr);
 
       } else if (type === "contributions") {
         downloadContributionsPdf(filtered.map((c: any) => ({
@@ -542,6 +593,10 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           row.shareholder?.phone ?? "—", row.project?.project_name ?? "—", row.plot_number ?? "—",
           row.period, fmtDate(row.monthlyDeadline), Number(row.monthlyDue), Number(row.paidBeforeDeadline), Number(row.due), Number(row.balance), row.progress / 100,
         ]));
+    } else if (type === "contributionsList") {
+      downloadExcel(`contributions-list-${stamp}`, "Contributions List",
+        ["Member Name", "EW No.", "Amount"],
+        filtered.map((r: any) => [r.name, `EW#${r.member_number}`, Number(r.amount)]));
     } else if (type === "contributions") {
       downloadExcel(`contributions-report-${stamp}`, "Contributions",
         ["Member", "Member No.", "Month", "Year", "Date Paid", "Amount", "Status", "Notes"],
@@ -588,11 +643,11 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     <div className="px-5 py-3 border-b flex flex-wrap gap-2 items-center bg-white flex-shrink-0" style={{ borderColor: "var(--border)" }}>
       <Filter size={13} className="text-gray-400 flex-shrink-0" />
       {/* Search */}
-      {["contributions", "payments", "refunds", "profits", "debtors"].includes(type) && (
+      {["contributions", "contributionsList", "payments", "refunds", "profits", "debtors"].includes(type) && (
         <div className="relative flex-1 min-w-[160px]">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder={type === "profits" ? "Search member or project…" : type === "debtors" ? "Search member/client, project or plot…" : "Search…"}
+            placeholder={type === "contributionsList" ? "Search member name or EW No.…" : type === "profits" ? "Search member or project…" : type === "debtors" ? "Search member/client, project or plot…" : "Search…"}
             className="w-full pl-7 pr-2 py-1.5 border rounded-lg text-xs focus:outline-none"
             style={{ borderColor: "var(--border)" }} />
         </div>
@@ -660,7 +715,15 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         </select>
       )}
       {/* Date range */}
-      {["payments", "refunds", "profits", "debtors"].includes(type) && (
+      {type === "contributionsList" && (
+        <select value={listStatusF} onChange={(e) => setListStatusF(e.target.value as "Active" | "Inactive" | "")}
+          className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white" style={{ borderColor: "var(--border)" }}>
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+          <option value="">All Members</option>
+        </select>
+      )}
+      {["contributionsList", "payments", "refunds", "profits", "debtors"].includes(type) && (
         <>
           <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
             From
@@ -795,6 +858,40 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
             {filtered.length === 0 && <div className="py-14 text-center"><AlertTriangle size={28} className="mx-auto mb-2 text-slate-300" /><p className="text-sm text-slate-400">No outstanding plot debt matches the selected filters.</p></div>}
           </div>
         </>
+      );
+    }
+
+    if (type === "contributionsList") {
+      const total = filtered.reduce((s: number, r: any) => s + Number(r.amount), 0);
+      return (
+        <div className="overflow-x-auto flex-1">
+          <table className="w-full text-sm">
+            <thead style={{ background: "#1e3a5f" }}>
+              <tr>{["#", "Member Name", "EW No.", "Amount (KES)"].map((h) => (
+                <th key={h} className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white ${h === "Amount (KES)" ? "text-right" : "text-left"}`}>{h}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {filtered.map((r: any, i: number) => (
+                <tr key={r.id} className="border-t hover:bg-gray-50" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#eef2ff" }}>
+                  <td className="px-3 py-1.5 text-xs text-gray-400">{i + 1}</td>
+                  <td className="px-3 py-1.5 font-semibold text-xs">{r.name}</td>
+                  <td className="px-3 py-1.5 text-xs font-bold" style={{ color: "#6366f1" }}>EW#{r.member_number}</td>
+                  <td className="px-3 py-1.5 text-xs font-bold text-right" style={{ color: Number(r.amount) > 0 ? "#16a34a" : "#94a3b8" }}>{fmtKESFull(Number(r.amount))}</td>
+                </tr>
+              ))}
+            </tbody>
+            {filtered.length > 0 && (
+              <tfoot>
+                <tr style={{ background: "#f0fdf4" }}>
+                  <td colSpan={3} className="px-3 py-1.5 text-xs font-bold uppercase" style={{ color: "#15803d" }}>Total</td>
+                  <td className="px-3 py-1.5 font-bold text-right" style={{ color: "#14532d" }}>{fmtKESFull(total)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          {filtered.length === 0 && <div className="py-12 text-center text-sm text-gray-400">No members match the selected filters.</div>}
+        </div>
       );
     }
 
