@@ -49,10 +49,11 @@ export interface Arrear {
 }
 
 /**
- * Arrears rules apply from this date onward. Instalments whose deadline is
- * before it (i.e. 18 Nov 2026 and earlier) are never treated as arrears.
+ * Arrears rules (including "pay the earliest month first") apply from this date
+ * onward. Instalments whose deadline is before it (October 2026 and earlier)
+ * are never treated as arrears.
  */
-export const ARREARS_START_DATE = "2026-11-19";
+export const ARREARS_START_DATE = "2026-11-01";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n: number) => String(n).padStart(2, "0");
