@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.egemeoardhi.app",
+      "sha256_cert_fingerprints": [
+        "36:16:5C:62:59:91:E7:29:83:98:9C:49:33:73:C7:CE:72:BE:99:B0:AF:08:8F:E0:2C:17:97:60:B3:E6:AE:4C"
+      ]
+    }
+  }
+]
