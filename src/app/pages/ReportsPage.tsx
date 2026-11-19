@@ -648,12 +648,16 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   };
 
   // ── filter bar ───────────────────────────────────────────────────────────
+  // Arrears filters are laid out on a grid (2 columns on phones, 3 on wider screens).
+  const gridFilters = type === "debtors";
   const filterBar = (
-    <div className="px-5 py-3 border-b flex flex-wrap gap-2 items-center bg-white flex-shrink-0" style={{ borderColor: "var(--border)" }}>
-      <Filter size={13} className="text-gray-400 flex-shrink-0" />
+    <div className={gridFilters
+      ? "px-5 py-3 border-b grid grid-cols-2 sm:grid-cols-3 gap-2 items-center bg-white [&_select]:w-full [&_select]:max-w-none [&_label]:w-full [&_input]:min-w-0 [&_label>input]:flex-1"
+      : "px-5 py-3 border-b flex flex-wrap gap-2 items-center bg-white"} style={{ borderColor: "var(--border)" }}>
+      {!gridFilters && <Filter size={13} className="text-gray-400 flex-shrink-0" />}
       {/* Search */}
       {["contributions", "contributionsList", "payments", "refunds", "profits", "debtors"].includes(type) && (
-        <div className="relative flex-1 min-w-[160px]">
+        <div className={gridFilters ? "relative col-span-full" : "relative flex-1 min-w-[160px]"}>
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)}
             placeholder={type === "contributionsList" ? "Search member name or EW No.…" : type === "profits" ? "Search member or project…" : type === "debtors" ? "Search member/client, project or plot…" : "Search…"}
@@ -1268,39 +1272,40 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         )}
       </div>
 
-      {/* Filters */}
-      {filterBar}
-
-      {/* Company header — shown in report body */}
-      {company && (
-        <div className="px-5 py-4 border-b bg-white flex-shrink-0 flex items-center gap-4"
-          style={{ borderColor: "var(--border)" }}>
-          {company.logo_data_url ? (
-            <img src={company.logo_data_url} alt="Logo" className="w-12 h-12 object-contain rounded-xl flex-shrink-0" />
-          ) : (
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: "#1e2d4a" }}>
-              <span className="text-white font-bold text-lg">{company.name.charAt(0)}</span>
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="font-bold text-base leading-tight" style={{ color: "#1a202c" }}>{company.name}</p>
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
-              {company.phone    && <span className="text-xs text-gray-400">{company.phone}</span>}
-              {company.email    && <span className="text-xs text-gray-400">{company.email}</span>}
-              {company.website  && <span className="text-xs text-gray-400">{company.website}</span>}
-              {company.location && <span className="text-xs text-gray-400">{company.location}</span>}
-            </div>
-          </div>
-          <div className="text-right flex-shrink-0">
-            <p className="text-xs font-bold uppercase tracking-wider" style={{ color: meta.color }}>{meta.label}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Generated {new Date().toLocaleDateString("en-KE", { dateStyle: "long" })}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Table area */}
+      {/* Scrollable body: filters and company header scroll away with the table */}
       <div className="flex-1 overflow-auto pb-20 md:pb-0">
+        {/* Filters */}
+        {filterBar}
+
+        {/* Company header — shown in report body */}
+        {company && (
+          <div className="px-5 py-4 border-b bg-white flex items-center gap-4"
+            style={{ borderColor: "var(--border)" }}>
+            {company.logo_data_url ? (
+              <img src={company.logo_data_url} alt="Logo" className="w-12 h-12 object-contain rounded-xl flex-shrink-0" />
+            ) : (
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: "#1e2d4a" }}>
+                <span className="text-white font-bold text-lg">{company.name.charAt(0)}</span>
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-base leading-tight" style={{ color: "#1a202c" }}>{company.name}</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
+                {company.phone    && <span className="text-xs text-gray-400">{company.phone}</span>}
+                {company.email    && <span className="text-xs text-gray-400">{company.email}</span>}
+                {company.website  && <span className="text-xs text-gray-400">{company.website}</span>}
+                {company.location && <span className="text-xs text-gray-400">{company.location}</span>}
+              </div>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-xs font-bold uppercase tracking-wider" style={{ color: meta.color }}>{meta.label}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Generated {new Date().toLocaleDateString("en-KE", { dateStyle: "long" })}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Table area */}
         {renderTable()}
       </div>
 
