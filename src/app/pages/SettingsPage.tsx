@@ -6612,13 +6612,12 @@ function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
         <div className="space-y-3">
           {[
             { q: "How do I add a new shareholder?", a: "Go to Shareholders in the sidebar, click the Add button, fill in the member's details and save. A member number is auto-assigned." },
-            { q: "How do members log in?", a: "Members log in using their registered phone number (e.g. 0712345678) and the default password 123456. They are prompted to change their password on first login." },
+            { q: "How do members log in?", a: "Members log in using their registered phone number (e.g. 0712345678) or email. On their first login they are asked to set a personal password." },
             { q: "How do I bulk-create login accounts?", a: "Go to Settings → User Accounts and click the Bulk Create button. Accounts will be created for all members who don't already have one." },
             { q: "How do I import shareholders from a spreadsheet?", a: "Go to Settings → Data Upload, select Shareholders, download the CSV template, fill it in, then upload. Duplicate member numbers are skipped automatically." },
             { q: "How do I record an M-Pesa contribution?", a: "Paste the M-Pesa confirmation SMS into the Contributions page. The system auto-parses the amount, reference and date." },
             { q: "How do I distribute profits to shareholders?", a: "Open a Project, scroll to the Profit Distributions section, click Distribute Profit, enter each member's amount and save." },
             { q: "How do I fix the RLS policy error when importing data?", a: "Run the SQL from the README in Supabase Dashboard → SQL Editor to re-apply the permissive RLS policies for the anon and authenticated roles." },
-            { q: "What is the default member password?", a: "123456. Members are required to set a new personal password on their first login." },
           ].map(({ q, a }, i) => (
             <FaqItem key={i} question={q} answer={a} />
           ))}
