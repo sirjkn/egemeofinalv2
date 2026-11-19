@@ -1254,9 +1254,9 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-5 py-4 border-b flex-shrink-0 flex items-center justify-between"
+      <div className="px-5 py-4 border-b flex-shrink-0 flex flex-wrap items-center justify-between gap-2"
         style={{ background: meta.color, borderColor: "rgba(0,0,0,0.1)" }}>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <button onClick={onBack}
             className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg hover:opacity-80"
             style={{ background: "rgba(255,255,255,0.15)", color: "#fff" }}>
@@ -1265,11 +1265,24 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
           <div style={{ color: "rgba(255,255,255,0.4)" }}>›</div>
           <h1 className="font-bold text-base text-white">{meta.label}</h1>
         </div>
-        {recordCount !== null && (
-          <span className="text-xs font-semibold px-3 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.9)" }}>
-            {recordCount} record{recordCount !== 1 ? "s" : ""}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {recordCount !== null && (
+            <span className="text-xs font-semibold px-3 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.9)" }}>
+              {recordCount} record{recordCount !== 1 ? "s" : ""}
+            </span>
+          )}
+          {/* Export buttons live in the header so they stay visible above the phone's bottom navigation. */}
+          <button onClick={handleExcel} title="Download Excel"
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg bg-white text-emerald-700 hover:bg-emerald-50 transition-colors">
+            <FileSpreadsheet size={14} /> Excel
+          </button>
+          <button onClick={handlePdf} disabled={downloading} title="Download PDF"
+            className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg bg-white hover:opacity-90 disabled:opacity-60 transition-opacity"
+            style={{ color: meta.color }}>
+            {downloading ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+            {downloading ? "PDF…" : "PDF"}
+          </button>
+        </div>
       </div>
 
       {/* Scrollable body: filters and company header scroll away with the table */}
@@ -1309,8 +1322,8 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         {renderTable()}
       </div>
 
-      {/* Download PDF footer */}
-      <div className="px-5 py-4 border-t bg-white flex-shrink-0 flex items-center justify-between"
+      {/* Download footer (desktop only — on phones the bottom navigation covers it; the header has the buttons) */}
+      <div className="px-5 py-4 border-t bg-white flex-shrink-0 hidden md:flex items-center justify-between"
         style={{ borderColor: "var(--border)" }}>
         <p className="text-xs text-gray-400">
           {recordCount !== null ? `${recordCount} record${recordCount !== 1 ? "s" : ""} shown` : "Summary report"}
