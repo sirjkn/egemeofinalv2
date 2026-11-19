@@ -119,9 +119,9 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   const [plotOptions, setPlotOptions] = useState<{ id: number; project_id: number; plot_number: string }[]>([]);
   // ── debtors (arrears) filter state — unpaid by default ──────────────────
   const [arrearStatusF, setArrearStatusF] = useState<"unpaid" | "paid" | "">("unpaid");
-  // Also list repayments due between today and the To date (or month end) that are
-  // not yet paid — members who have not defaulted yet.
-  const [includeUpcoming, setIncludeUpcoming] = useState(false);
+  // Picking a To date of today or later also lists repayments due up to that date
+  // which are not yet paid (members who have not defaulted yet), marked "Upcoming".
+  const includeUpcoming = type === "debtors" && !!dateTo && dateTo >= todayEAT();
   const [payRequest, setPayRequest] = useState<ArrearPayRequest | null>(null);
   const [notifyState, setNotifyState] = useState<Record<string, { status: "sending" | "sent" | "error"; message?: string }>>({});
 
@@ -210,10 +210,9 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
 
         const shareholderMap = Object.fromEntries(shareholders.map((m) => [m.id, m]));
         const clientMap = Object.fromEntries(debtorClients.map((m) => [m.id, m]));
-        // Upcoming window: from today up to the To date, or to the end of this month.
+        // Upcoming window: from today up to a To date that is today or later.
         const today = todayEAT();
-        const monthEnd = (() => { const [y, m] = today.split("-").map(Number); return `${today.slice(0, 7)}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; })();
-        const upcomingUntil = includeUpcoming ? (dateTo && dateTo >= today ? dateTo : monthEnd) : undefined;
+        const upcomingUntil = includeUpcoming ? dateTo : undefined;
         const projectMap = Object.fromEntries(projects.map((pr) => [pr.id, pr]));
         const arrearRows = (debtPlots ?? []).flatMap((plot: any) => {
           const member = plot.assigned_to_type === "client"
@@ -772,12 +771,6 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       )}
       {type === "debtors" && (
         <>
-          <label className="flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-semibold cursor-pointer select-none"
-            style={{ borderColor: includeUpcoming ? "#f59e0b" : "var(--border)", background: includeUpcoming ? "#fffbeb" : "#fff", color: includeUpcoming ? "#b45309" : "#475569" }}
-            title="Also list repayments due from today up to the To date (or end of this month) that are not yet paid">
-            <input type="checkbox" checked={includeUpcoming} onChange={(e) => setIncludeUpcoming(e.target.checked)} className="accent-amber-500" />
-            Include upcoming{includeUpcoming ? ` (to ${dateTo && dateTo >= todayEAT() ? fmtDate(dateTo) : "month end"})` : ""}
-          </label>
           <select value={arrearStatusF} onChange={(e) => setArrearStatusF(e.target.value as "unpaid" | "paid" | "")}
             className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white"
             style={{ borderColor: arrearStatusF === "unpaid" ? "#ef4444" : arrearStatusF === "paid" ? "#16a34a" : "var(--border)", color: arrearStatusF === "unpaid" ? "#dc2626" : arrearStatusF === "paid" ? "#15803d" : undefined }}>
@@ -872,6 +865,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.status === "paid" ? "bg-emerald-50 text-emerald-700" : row.status === "upcoming" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"}`}>
                         {row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid"}
                       </span>
+                      {row.status === "upcoming" && <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Due {fmtDate(row.dueDate)}</p>}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1.5">
