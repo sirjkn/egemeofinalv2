@@ -43,7 +43,7 @@ import { downloadExcel } from "@/lib/excel";
 import { toast, Toaster } from "sonner";
 import { LoginPage, SetPasswordPage, fetchProfile, type UserProfile, phoneToEmail } from "@/app/pages/AuthPage";
 import { ImpersonationCtx, useImpersonation } from "@/lib/impersonation";
-import { computePlotArrears, unpaidArrearsTotal, type Arrear } from "@/lib/arrears";
+import { computePlotArrears, unpaidArrearsTotal, todayEAT, type Arrear } from "@/lib/arrears";
 import { ShareholderPortal, ClientPortal, InvestorPortal } from "@/app/pages/MemberPortal";
 import {
   BarChart as RechartBarChart, Bar,
@@ -2760,6 +2760,41 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const { realProfile } = useImpersonation();
   const showDevLoginAs = import.meta.env.DEV && realProfile?.role === "admin";
   const [devLoginAsOpen, setDevLoginAsOpen] = useState(false);
+
+  // Monthly Arrears card: unpaid arrears whose instalment falls in the current month.
+  const [monthArrears, setMonthArrears] = useState<{ count: number; total: number } | "error" | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: plots, error } = await supabase.from("plots")
+          .select("id,plot_number,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status")
+          .not("assigned_to_id", "is", null).in("status", ["assigned", "sold"]);
+        if (error) throw error;
+        const plotIds = (plots ?? []).map((pl: any) => Number(pl.id));
+        const pmts: any[] = [];
+        if (plotIds.length) {
+          // Paged: Supabase returns at most 1000 rows per request.
+          for (let from = 0; ; from += 1000) {
+            const { data, error: pErr } = await supabase.from("plot_payments")
+              .select("id,plot_id,amount,payment_date,created_at").in("plot_id", plotIds)
+              .order("id").range(from, from + 999);
+            if (pErr) throw pErr;
+            pmts.push(...(data ?? []));
+            if (!data || data.length < 1000) break;
+          }
+        }
+        const currentMonth = todayEAT().slice(0, 7);
+        const unpaidThisMonth = (plots ?? [])
+          .flatMap((pl: any) => computePlotArrears(pl, pmts))
+          .filter((a) => a.status === "unpaid" && a.period === currentMonth);
+        if (!cancelled) setMonthArrears({ count: unpaidThisMonth.length, total: unpaidArrearsTotal(unpaidThisMonth) });
+      } catch {
+        if (!cancelled) setMonthArrears("error");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [stats, setStats] = useState<{ shareholders: number; clients: number; investors: number; totalCollected: number; thisMonth: number; overdueCount: number; plots: number; assignedPlots: number } | null>(null);
   const [monthlyCollections, setMonthlyCollections] = useState<Array<{ month: string; amount: number }>>([]);
   const [memberDist, setMemberDist] = useState<Array<{ name: string; value: number; color: string }>>([]);
@@ -3329,6 +3364,18 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 style={{ borderColor: "var(--card-border)" }}>
                 <span className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: mod.iconBg, color: mod.iconColor }}>{mod.icon}</span>
                 <span className="text-[10px] font-medium text-center leading-tight" style={{ color: "#374151" }}>{mod.label}</span>
+                {mod.report === "debtors" && (
+                  monthArrears === "error" ? <span className="text-[10px] text-gray-400">—</span>
+                  : monthArrears ? (
+                    <span className="flex flex-col items-center leading-tight">
+                      <span className="text-[11px] font-extrabold" style={{ color: monthArrears.count ? "#be123c" : "#059669" }}>
+                        {monthArrears.count} arrear{monthArrears.count !== 1 ? "s" : ""}
+                      </span>
+                      <span className="text-[10px] font-bold" style={{ color: monthArrears.count ? "#e11d48" : "#059669" }}>{fmtKESFull(monthArrears.total)}</span>
+                      <span className="text-[9px] text-gray-400">{new Date().toLocaleDateString("en-KE", { month: "short", year: "numeric", timeZone: "Africa/Nairobi" })}</span>
+                    </span>
+                  ) : <Loader2 size={12} className="animate-spin text-gray-300" />
+                )}
               </button>
             ))}
           </div>
