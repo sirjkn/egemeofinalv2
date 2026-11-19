@@ -45,8 +45,16 @@ export interface ArrearPayRequest {
 export type ArrearPayComponent = React.ComponentType<{ request: ArrearPayRequest; onClose: () => void; onPaid: () => void }>;
 
 function ReportsPage({ ArrearPay }: { ArrearPay?: ArrearPayComponent } = {}) {
-  const [sub, setSub] = useState<ReportSub | null>(null);
-  if (sub) return <ReportViewPage type={sub} onBack={() => setSub(null)} ArrearPay={ArrearPay} />;
+  // ?report=<type> opens a report directly (e.g. the dashboard's Monthly Arrears card).
+  const [sub, setSub] = useState<ReportSub | null>(() => {
+    const requested = new URLSearchParams(window.location.search).get("report");
+    return requested && requested in REPORT_META ? (requested as ReportSub) : null;
+  });
+  const closeReport = () => {
+    setSub(null);
+    if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
+  };
+  if (sub) return <ReportViewPage type={sub} onBack={closeReport} ArrearPay={ArrearPay} />;
 
   return (
     <div className="h-full overflow-auto pb-20 md:pb-0" style={{ background: "var(--background)" }}>

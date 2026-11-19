@@ -2740,7 +2740,9 @@ function InvestorsPage() {
 
 // ─── Admin Dashboard ──────────────────────────────────────────────────────────
 
-const adminDashMods = [
+const adminDashMods: Array<{ id: Module; label: string; icon: React.ReactNode; iconColor: string; iconBg: string; report?: string }> = [
+  // Opens the Reports page straight on the Arrears report.
+  { id: "reports"      as Module, label: "Monthly Arrears", icon: <AlertTriangle size={26} />,   iconColor: "#e11d48", iconBg: "#fff1f2", report: "debtors" },
   { id: "shareholders" as Module, label: "Shareholders",  icon: <Users size={26} />,            iconColor: "#6366f1", iconBg: "#eef2ff" },
   { id: "clients"      as Module, label: "Clients",       icon: <UserCircle2 size={26} />,       iconColor: "#a855f7", iconBg: "#faf5ff" },
   { id: "contributions"as Module, label: "Contributions", icon: <Link2 size={26} />,             iconColor: "#ec4899", iconBg: "#fdf2f8" },
@@ -3322,7 +3324,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
           <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">Modules</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
             {adminDashMods.map((mod) => (
-              <button key={mod.id} onClick={() => onNavigate(mod.id)}
+              <button key={mod.label} onClick={() => mod.report ? navigate(`/${mod.id}?report=${mod.report}`) : onNavigate(mod.id)}
                 className="bg-white rounded-xl p-3 flex flex-col items-center gap-2 border hover:shadow-md transition-shadow"
                 style={{ borderColor: "var(--card-border)" }}>
                 <span className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: mod.iconBg, color: mod.iconColor }}>{mod.icon}</span>
