@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   Eye, EyeOff, Loader2, Lock, Phone, MapPin, Mail, Globe,
-  CheckCircle, ArrowLeft, User, KeyRound,
+  CheckCircle, ArrowLeft, User, KeyRound, Fingerprint,
 } from "lucide-react";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
 import { sendSms, loadSmsSettingsFromSupabase } from "@/lib/sms";
+import { isBiometricSupported, isBiometricEnabledOnDevice, loginWithBiometrics, forgetBiometricOnDevice } from "@/lib/passkey";
 
 export interface UserProfile {
   id: string;
@@ -261,6 +262,29 @@ function IdentifierStep({ onNext, onLoggedIn, company }: {
   const [err, setErr]         = useState("");
   const isPhone = isPhoneInput(value);
 
+  // Biometric login is offered on devices where it was enabled from Profile Settings.
+  const [canBiometric, setCanBiometric] = useState(false);
+  useEffect(() => {
+    if (!isBiometricEnabledOnDevice()) return;
+    isBiometricSupported().then(setCanBiometric);
+  }, []);
+  const biometricLogin = async () => {
+    setLoading(true); setErr(""); setStatus("Waiting for fingerprint / face…");
+    try {
+      const session = await loginWithBiometrics();
+      const profile = await fetchProfile(session.user.id, session.user.email ?? "");
+      if (!profile) throw new Error("Account not configured. Contact your administrator.");
+      onLoggedIn(session, profile);
+    } catch (e: any) {
+      const msg = e?.message ?? "Biometric login failed.";
+      if (/not registered/i.test(msg)) { forgetBiometricOnDevice(); setCanBiometric(false); }
+      setErr(msg);
+    } finally {
+      setLoading(false);
+      setStatus("");
+    }
+  };
+
   const devAdminLogin = async () => {
     if (!import.meta.env.DEV || !DEV_ADMIN_EMAIL || !DEV_ADMIN_PASSWORD) return;
     setLoading(true); setErr(""); setStatus("Signing in as admin (dev)…");
@@ -463,6 +487,14 @@ function IdentifierStep({ onNext, onLoggedIn, company }: {
             {loading ? <Loader2 size={15} className="animate-spin" /> : null}
             {loading ? "Please wait…" : "Continue"}
           </button>
+
+          {canBiometric && (
+            <button type="button" onClick={biometricLogin} disabled={loading}
+              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 border-2 disabled:opacity-60 hover:bg-indigo-50 transition-colors"
+              style={{ color: "#4338ca", borderColor: "#c7d2fe" }}>
+              <Fingerprint size={17} /> Login with fingerprint / face
+            </button>
+          )}
 
           {import.meta.env.DEV && DEV_ADMIN_EMAIL && DEV_ADMIN_PASSWORD && (
             <button type="button" onClick={devAdminLogin} disabled={loading}

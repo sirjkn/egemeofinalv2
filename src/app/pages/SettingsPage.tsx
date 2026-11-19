@@ -9,6 +9,7 @@ import {
   Activity, Filter, LogIn, CreditCard as PayIcon, Edit2, Trash as TrashIcon,
   UserPlus, BarChart2, Map, RefreshCcw, BellRing, ShieldAlert, Camera, LayoutDashboard,
   BookOpen, FileDown,
+  Fingerprint,
 } from "lucide-react";
 import {
   shareholdersApi, clientsApi, contributionsApi, checkDbHealth,
@@ -22,6 +23,10 @@ import { getCompanyDetails, saveCompanyDetails, type CompanyDetails } from "@/li
 import { downloadSystemGuidePdf } from "@/lib/pdf";
 import { getPaymentSettings, type PaymentSettings } from "@/lib/mpesa";
 import { loadPaymentSettingsFromDb, savePaymentSettingsToDb, loadSmsSettingsFromDb, saveSmsSettingsToDb, loadReminderTemplates, saveReminderTemplates } from "@/lib/settingsApi";
+import {
+  isBiometricSupported, isBiometricEnabledOnDevice, enableBiometricLogin, listBiometricDevices,
+  removeBiometricDevice, forgetBiometricOnDevice, type BiometricDevice,
+} from "@/lib/passkey";
 import { getSmsSettings, saveSmsSettings, mergeSmsSettings, sendSms, loadSmsSettingsFromSupabase, SMS_TRIGGERS, DEFAULT_TEMPLATES, interpolate, type SmsSettings } from "@/lib/sms";
 import { useImpersonation } from "@/lib/impersonation";
 import type { UserProfile } from "@/app/pages/AuthPage";
@@ -5948,6 +5953,104 @@ select cron.schedule(
   );
 }
 
+// ─── Biometric (fingerprint / face) login card ───────────────────────────────
+
+function BiometricLoginCard() {
+  const [supported, setSupported] = useState<boolean | null>(null);
+  const [enabledHere, setEnabledHere] = useState(isBiometricEnabledOnDevice());
+  const [devices, setDevices] = useState<BiometricDevice[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  const loadDevices = useCallback(async () => {
+    try { setDevices(await listBiometricDevices()); }
+    catch (e: any) { setDevices([]); setMsg({ type: "err", text: e?.message ?? "Could not load devices." }); }
+  }, []);
+
+  useEffect(() => { isBiometricSupported().then(setSupported); loadDevices(); }, [loadDevices]);
+
+  const enable = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      await enableBiometricLogin();
+      setEnabledHere(true);
+      setMsg({ type: "ok", text: "Fingerprint / face login is on for this device. Use it next time you log in." });
+      await loadDevices();
+    } catch (e: any) {
+      setMsg({ type: "err", text: e?.message ?? "Could not enable biometric login." });
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (d: BiometricDevice) => {
+    setBusy(true); setMsg(null);
+    try {
+      await removeBiometricDevice(d.id);
+      // If no devices remain, this device can no longer use it either.
+      const left = (devices ?? []).filter((x) => x.id !== d.id);
+      if (left.length === 0) { forgetBiometricOnDevice(); setEnabledHere(false); }
+      setDevices(left);
+      setMsg({ type: "ok", text: `Removed ${d.device_name || "device"}.` });
+    } catch (e: any) {
+      setMsg({ type: "err", text: e?.message ?? "Could not remove device." });
+    } finally { setBusy(false); }
+  };
+
+  const fmt = (ts: string | null) => ts ? new Date(ts).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" }) : "never";
+
+  return (
+    <div className="bg-white rounded-2xl border p-5 space-y-4" style={{ borderColor: "var(--card-border)" }}>
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "#eef2ff", color: "#4338ca" }}>
+          <Fingerprint size={20} />
+        </div>
+        <div className="flex-1">
+          <h2 className="text-sm font-bold" style={{ color: "#1a202c" }}>Fingerprint / Face Login</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Log in with your phone's fingerprint or face unlock instead of typing your password. Your fingerprint never leaves your phone.</p>
+        </div>
+      </div>
+
+      {supported === false ? (
+        <p className="text-xs rounded-xl px-3 py-2.5" style={{ background: "#f8fafc", color: "#64748b" }}>
+          This device or app doesn't support fingerprint / face login. Open the app in Chrome on your phone to enable it.
+        </p>
+      ) : (
+        <button onClick={enable} disabled={busy || supported === null}
+          className="w-full py-2.5 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60"
+          style={{ background: "#4338ca" }}>
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Fingerprint size={15} />}
+          {enabledHere ? "Re-enable on this device" : "Enable on this device"}
+        </button>
+      )}
+
+      {msg && <p className={`text-xs font-semibold ${msg.type === "ok" ? "text-green-600" : "text-red-500"}`}>{msg.text}</p>}
+
+      <div>
+        <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Devices with biometric login</p>
+        {devices === null ? (
+          <div className="flex items-center gap-2 text-xs text-gray-400"><Loader2 size={13} className="animate-spin" /> Loading…</div>
+        ) : devices.length === 0 ? (
+          <p className="text-xs text-gray-400">None yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {devices.map((d) => (
+              <div key={d.id} className="flex items-center gap-3 rounded-xl border px-3 py-2.5" style={{ borderColor: "var(--border)" }}>
+                <Fingerprint size={15} className="text-indigo-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-slate-800 truncate">{d.device_name || "Device"}</p>
+                  <p className="text-[10px] text-slate-400">Added {fmt(d.created_at)} · Last used {fmt(d.last_used_at)}</p>
+                </div>
+                <button onClick={() => remove(d)} disabled={busy}
+                  className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg border hover:bg-red-50 disabled:opacity-60"
+                  style={{ color: "#dc2626", borderColor: "#fecaca" }}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ProfileSettingsPage({ onBack }: { onBack: () => void }) {
   const [newPw, setNewPw] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
@@ -6210,6 +6313,9 @@ function ProfileSettingsPage({ onBack }: { onBack: () => void }) {
             </div>
           </div>
         )}
+
+        {/* Biometric login */}
+        <BiometricLoginCard />
 
         {/* Change password */}
         <div className="bg-white rounded-2xl border p-5 space-y-4" style={{ borderColor: "var(--card-border)" }}>
