@@ -22,6 +22,7 @@ import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 type ReportSub = "contributions" | "contributionsList" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits" | "debtors";
 
 const REPORT_META: Record<ReportSub, { label: string; desc: string; color: string; bg: string; icon: React.ReactNode }> = {
+  debtors:       { label: "Arrears",               desc: "Plot arrears: monthly repayments missed by the deadline", color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
   summary:       { label: "Annual Summary",       desc: "Membership, contributions & payments overview", color: "#1e2d4a", bg: "#eef2ff", icon: <BarChart2 size={22} /> },
   contributions: { label: "Contributions Report", desc: "All monthly contributions with status",         color: "#6366f1", bg: "#eef2ff", icon: <Link2 size={22} /> },
   contributionsList: { label: "Contributions List", desc: "Total contributed per member for a date range",   color: "#4f46e5", bg: "#eef2ff", icon: <ListOrdered size={22} /> },
@@ -30,7 +31,6 @@ const REPORT_META: Record<ReportSub, { label: string; desc: string; color: strin
   shareholders:  { label: "Shareholders List",     desc: "All shareholders with savings",                color: "#6366f1", bg: "#eef2ff", icon: <Users size={22} /> },
   clients:       { label: "Clients List",          desc: "All registered clients",                       color: "#a855f7", bg: "#faf5ff", icon: <UserCircle2 size={22} /> },
   profits:       { label: "Profit Distributions",  desc: "All profit payouts by project and member",     color: "#d97706", bg: "#fffbeb", icon: <TrendingUp size={22} /> },
-  debtors:       { label: "Debtors",               desc: "Plot arrears: monthly repayments missed by the deadline", color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
 };
 
 /** Arrear row the Debtors report hands to the payment modal. */
@@ -485,7 +485,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             row.status === "paid" ? "Paid" : "Not paid",
           ]),
           total: filtered.reduce((sum: number, row: any) => sum + Number(row.remaining), 0),
-        }], "Debtors Report — Plot Arrears", co, filterStr);
+        }], "Arrears Report", co, filterStr);
 
       } else if (type === "contributionsList") {
         downloadReportPdf([{
@@ -587,7 +587,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   const handleExcel = () => {
     const stamp = new Date().toISOString().slice(0, 10);
     if (type === "debtors") {
-      downloadExcel(`debtors-arrears-${stamp}`, "Arrears",
+      downloadExcel(`arrears-report-${stamp}`, "Arrears",
         ["Member", "Member No.", "Phone", "Month", "Due Date", "Project", "Plot Number", "Monthly Repayment", "Outstanding", "Paid Status"],
         filtered.map((row: any) => [
           row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
