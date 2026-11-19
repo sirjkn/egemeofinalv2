@@ -38,6 +38,8 @@ export const SMS_TRIGGERS = {
   passwordReminder:    "sms_password_reminder",
   // Arrears notice (sent manually with the Notify button)
   arrearsNotice:       "sms_arrears_notice",
+  // Upcoming repayment reminder (Notify on an "Upcoming" row in the Arrears report)
+  upcomingNotice:      "sms_upcoming_notice",
 } as const;
 
 // ─── Default message templates ────────────────────────────────────────────────
@@ -69,6 +71,8 @@ export const DEFAULT_TEMPLATES: Record<string, string> = {
     "Dear {name}, your plot {plotNumber} payment is due TODAY ({deadlineDay}). Pay now to avoid being marked late. - Egemeo Ardhi",
   sms_arrears_notice:
     "Dear {name}, your monthly repayment of {amount} which was due on {dueDate} has an arrears of {arrears}. Please clear as soon as possible to avoid late payment penalty. Regards Egemeo",
+  sms_upcoming_notice:
+    "Dear {name}, your monthly repayment of {amount} for plot {plotNumber} is due on {dueDate}. Please pay on or before the due date to avoid arrears. Regards Egemeo",
 };
 
 // Substitute {variable} placeholders in a template string
@@ -259,6 +263,9 @@ export const smsTemplates = {
 
   arrearsNotice: (name: string, amount: string, dueDate: string, arrears: string, plotNumber = "") =>
     interpolate(getTpl(SMS_TRIGGERS.arrearsNotice), { name, amount, dueDate, arrears, plotNumber }),
+
+  upcomingNotice: (name: string, amount: string, dueDate: string, plotNumber = "") =>
+    interpolate(getTpl(SMS_TRIGGERS.upcomingNotice), { name, amount, dueDate, plotNumber }),
 
   plotReminder: (name: string, plotNumber: string, deadlineDay: string, daysUntil: number) => {
     const id = daysUntil === 0 ? SMS_TRIGGERS.plotReminderToday

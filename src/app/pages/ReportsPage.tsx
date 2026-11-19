@@ -15,7 +15,7 @@ import {
 } from "@/lib/pdf";
 import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
-import { computePlotArrears } from "@/lib/arrears";
+import { computePlotArrears, todayEAT } from "@/lib/arrears";
 import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
 import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 
@@ -119,6 +119,9 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   const [plotOptions, setPlotOptions] = useState<{ id: number; project_id: number; plot_number: string }[]>([]);
   // ── debtors (arrears) filter state — unpaid by default ──────────────────
   const [arrearStatusF, setArrearStatusF] = useState<"unpaid" | "paid" | "">("unpaid");
+  // Also list repayments due between today and the To date (or month end) that are
+  // not yet paid — members who have not defaulted yet.
+  const [includeUpcoming, setIncludeUpcoming] = useState(false);
   const [payRequest, setPayRequest] = useState<ArrearPayRequest | null>(null);
   const [notifyState, setNotifyState] = useState<Record<string, { status: "sending" | "sent" | "error"; message?: string }>>({});
 
@@ -128,15 +131,18 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
     if (!phone) { setNotifyState((s) => ({ ...s, [row.key]: { status: "error", message: "No phone number" } })); return; }
     setNotifyState((s) => ({ ...s, [row.key]: { status: "sending" } }));
     try {
-      const message = smsTemplates.arrearsNotice(
-        row.shareholder?.name ?? "Member",
-        fmtKESFull(Number(row.amount)),
-        fmtDate(row.dueDate),
-        fmtKESFull(Number(row.remaining)),
-        String(row.plotNumber ?? ""),
-      );
-      await sendSms(phone, message, SMS_TRIGGERS.arrearsNotice);
-      logActivity({ category: "plot", action: "notify", description: `Arrears notice (${row.monthLabel}, plot ${row.plotNumber}) sent to ${row.shareholder?.name ?? "member"}`, meta: { plot_id: row.plotId, period: row.period, amount: row.remaining } });
+      const upcoming = row.status === "upcoming";
+      const message = upcoming
+        ? smsTemplates.upcomingNotice(row.shareholder?.name ?? "Member", fmtKESFull(Number(row.remaining)), fmtDate(row.dueDate), String(row.plotNumber ?? ""))
+        : smsTemplates.arrearsNotice(
+            row.shareholder?.name ?? "Member",
+            fmtKESFull(Number(row.amount)),
+            fmtDate(row.dueDate),
+            fmtKESFull(Number(row.remaining)),
+            String(row.plotNumber ?? ""),
+          );
+      await sendSms(phone, message, upcoming ? SMS_TRIGGERS.upcomingNotice : SMS_TRIGGERS.arrearsNotice);
+      logActivity({ category: "plot", action: "notify", description: `${upcoming ? "Upcoming repayment" : "Arrears"} notice (${row.monthLabel}, plot ${row.plotNumber}) sent to ${row.shareholder?.name ?? "member"}`, meta: { plot_id: row.plotId, period: row.period, amount: row.remaining } });
       setNotifyState((s) => ({ ...s, [row.key]: { status: "sent" } }));
     } catch (e: any) {
       setNotifyState((s) => ({ ...s, [row.key]: { status: "error", message: e?.message ?? "SMS failed" } }));
@@ -204,13 +210,17 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
 
         const shareholderMap = Object.fromEntries(shareholders.map((m) => [m.id, m]));
         const clientMap = Object.fromEntries(debtorClients.map((m) => [m.id, m]));
+        // Upcoming window: from today up to the To date, or to the end of this month.
+        const today = todayEAT();
+        const monthEnd = (() => { const [y, m] = today.split("-").map(Number); return `${today.slice(0, 7)}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; })();
+        const upcomingUntil = includeUpcoming ? (dateTo && dateTo >= today ? dateTo : monthEnd) : undefined;
         const projectMap = Object.fromEntries(projects.map((pr) => [pr.id, pr]));
         const arrearRows = (debtPlots ?? []).flatMap((plot: any) => {
           const member = plot.assigned_to_type === "client"
             ? clientMap[Number(plot.assigned_to_id)] ?? null
             : shareholderMap[Number(plot.assigned_to_id)] ?? null;
           const project = projectMap[Number(plot.project_id)] ?? null;
-          return computePlotArrears(plot, paymentRows).map((a) => ({
+          return computePlotArrears(plot, paymentRows, today, { includeUpcomingUntil: upcomingUntil }).map((a) => ({
             ...a,
             key: `${a.plotId}-${a.period}`,
             plot,
@@ -227,12 +237,13 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         // Decided before filtering so a date filter can't make a newer month payable.
         const seenPlots = new Set<number>();
         for (const row of arrearRows) {
-          if (row.status !== "unpaid" || seenPlots.has(row.plotId)) continue;
+          if ((row.status !== "unpaid" && row.status !== "upcoming") || seenPlots.has(row.plotId)) continue;
           seenPlots.add(row.plotId);
           row.payable = true;
         }
         setRows(arrearRows
-          .filter((row: any) => !arrearStatusF || row.status === arrearStatusF)
+          // "Not paid" covers overdue arrears and (when included) upcoming repayments.
+          .filter((row: any) => !arrearStatusF || row.status === arrearStatusF || (arrearStatusF === "unpaid" && row.status === "upcoming"))
           .filter((row: any) => (!dateFrom || row.dueDate >= dateFrom) && (!dateTo || row.dueDate <= dateTo)));
 
       } else if (type === "profits") {
@@ -404,7 +415,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       }
     } catch { setRows([]); }
     finally { setLoading(false); }
-  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, arrearStatusF, shareholders, debtorClients, projects]);
+  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, arrearStatusF, includeUpcoming, shareholders, debtorClients, projects]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -480,6 +491,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         memberTypeF && `Member Type: ${memberTypeF === "client" ? "Client" : "Shareholder"}`,
         plotF && `Plot: ${plotOptions.find((p) => String(p.id) === plotF)?.plot_number ?? plotF}`,
         type === "debtors" && `Status: ${arrearStatusF === "unpaid" ? "Not paid" : arrearStatusF === "paid" ? "Paid" : "All"}`,
+        type === "debtors" && includeUpcoming && "Including upcoming repayments",
       ].filter(Boolean).join(" · ") || "All records";
 
       if (type === "debtors") {
@@ -490,7 +502,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
             row.shareholder?.phone ?? "—", row.monthLabel, row.project?.project_name ?? "—", row.plotNumber,
             Number(row.amount).toLocaleString("en-KE"), Number(row.remaining).toLocaleString("en-KE"),
-            row.status === "paid" ? "Paid" : "Not paid",
+            row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid",
           ]),
           total: filtered.reduce((sum: number, row: any) => sum + Number(row.remaining), 0),
         }], "Arrears Report", co, filterStr);
@@ -600,7 +612,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         filtered.map((row: any) => [
           row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
           row.shareholder?.phone ?? "—", row.monthLabel, fmtDate(row.dueDate), row.project?.project_name ?? "—", row.plotNumber,
-          Number(row.amount), Number(row.remaining), row.status === "paid" ? "Paid" : "Not paid",
+          Number(row.amount), Number(row.remaining), row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid",
         ]));
     } else if (type === "contributionsList") {
       downloadExcel(`contributions-list-${stamp}`, "Contributions List",
@@ -760,6 +772,12 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       )}
       {type === "debtors" && (
         <>
+          <label className="flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs font-semibold cursor-pointer select-none"
+            style={{ borderColor: includeUpcoming ? "#f59e0b" : "var(--border)", background: includeUpcoming ? "#fffbeb" : "#fff", color: includeUpcoming ? "#b45309" : "#475569" }}
+            title="Also list repayments due from today up to the To date (or end of this month) that are not yet paid">
+            <input type="checkbox" checked={includeUpcoming} onChange={(e) => setIncludeUpcoming(e.target.checked)} className="accent-amber-500" />
+            Include upcoming{includeUpcoming ? ` (to ${dateTo && dateTo >= todayEAT() ? fmtDate(dateTo) : "month end"})` : ""}
+          </label>
           <select value={arrearStatusF} onChange={(e) => setArrearStatusF(e.target.value as "unpaid" | "paid" | "")}
             className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white"
             style={{ borderColor: arrearStatusF === "unpaid" ? "#ef4444" : arrearStatusF === "paid" ? "#16a34a" : "var(--border)", color: arrearStatusF === "unpaid" ? "#dc2626" : arrearStatusF === "paid" ? "#15803d" : undefined }}>
@@ -805,13 +823,18 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       const unpaidRows = filtered.filter((row: any) => row.status === "unpaid");
       const totalOutstanding = unpaidRows.reduce((sum: number, row: any) => sum + Number(row.remaining), 0);
       const debtorCount = new Set(unpaidRows.map((row: any) => `${row.memberType}:${row.plot?.assigned_to_id}`)).size;
+      const upcomingRows = filtered.filter((row: any) => row.status === "upcoming");
+      const upcomingTotal = upcomingRows.reduce((sum: number, row: any) => sum + Number(row.remaining), 0);
+      const upcomingMembers = new Set(upcomingRows.map((row: any) => `${row.memberType}:${row.plot?.assigned_to_id}`)).size;
+      const paidCount = filtered.filter((row: any) => row.status === "paid").length;
       return (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-5 py-4 border-b bg-slate-50" style={{ borderColor: "var(--border)" }}>
+          <div className={`grid grid-cols-1 gap-3 px-5 py-4 border-b bg-slate-50 ${includeUpcoming ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3"}`} style={{ borderColor: "var(--border)" }}>
             {[
               { label: "Total Unpaid Arrears", value: fmtKESFull(totalOutstanding), color: "#dc2626", sub: "Outstanding on missed months" },
-              { label: "Unpaid Months", value: String(unpaidRows.length), color: "#d97706", sub: `${filtered.length - unpaidRows.length} arrear${filtered.length - unpaidRows.length === 1 ? "" : "s"} since paid` },
+              { label: "Unpaid Months", value: String(unpaidRows.length), color: "#d97706", sub: `${paidCount} arrear${paidCount === 1 ? "" : "s"} since paid` },
               { label: "Debtors", value: String(debtorCount), color: "#1e3a5f", sub: "Members with unpaid arrears" },
+              ...(includeUpcoming ? [{ label: "Upcoming (not yet due)", value: fmtKESFull(upcomingTotal), color: "#b45309", sub: `${upcomingRows.length} repayment${upcomingRows.length === 1 ? "" : "s"} · ${upcomingMembers} member${upcomingMembers === 1 ? "" : "s"}` }] : []),
             ].map((stat) => (
               <div key={stat.label} className="rounded-xl border bg-white px-4 py-3.5" style={{ borderColor: "var(--border)" }}>
                 <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{stat.label}</p>
@@ -843,11 +866,11 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                     <td className="px-3 py-2 text-xs font-bold text-blue-700">{row.plotNumber}</td>
                     <td className="px-3 py-2">
                       <p className="text-xs font-bold text-slate-800">{fmtKESFull(Number(row.amount))}</p>
-                      {row.status === "unpaid" && Number(row.paid) > 0 && <p className="text-[10px] text-rose-600">{fmtKESFull(Number(row.remaining))} left</p>}
+                      {row.status !== "paid" && Number(row.paid) > 0 && <p className={`text-[10px] ${row.status === "upcoming" ? "text-amber-600" : "text-rose-600"}`}>{fmtKESFull(Number(row.remaining))} left</p>}
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.status === "paid" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
-                        {row.status === "paid" ? "Paid" : "Not paid"}
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.status === "paid" ? "bg-emerald-50 text-emerald-700" : row.status === "upcoming" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"}`}>
+                        {row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid"}
                       </span>
                     </td>
                     <td className="px-3 py-2">
@@ -863,11 +886,11 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                             })}
                               className="rounded-lg px-3 py-1.5 text-[11px] font-bold text-white hover:opacity-90" style={{ background: "#16a34a" }}>Pay</button>
                           : <span className="text-[10px] text-slate-400">{row.payable ? "—" : "Pay earlier month first"}</span>}
-                      {row.status === "unpaid" && (() => {
+                      {row.status !== "paid" && (() => {
                         const n = notifyState[row.key];
                         return (
                           <button onClick={() => notifyArrear(row)} disabled={n?.status === "sending"}
-                            title={n?.status === "error" ? n.message : "Send an arrears reminder SMS to this member"}
+                            title={n?.status === "error" ? n.message : row.status === "upcoming" ? "Send an upcoming-repayment reminder SMS" : "Send an arrears reminder SMS to this member"}
                             className="rounded-lg border px-3 py-1.5 text-[11px] font-bold transition-colors disabled:opacity-60"
                             style={n?.status === "sent"
                               ? { borderColor: "#86efac", background: "#f0fdf4", color: "#15803d" }
@@ -890,6 +913,13 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                     <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalOutstanding)}</td>
                     <td colSpan={2} />
                   </tr>
+                  {includeUpcoming && upcomingRows.length > 0 && (
+                    <tr style={{ background: "#fffbeb" }}>
+                      <td colSpan={5} className="px-3 py-2 text-xs font-extrabold uppercase text-amber-700">Upcoming (not yet due)</td>
+                      <td className="px-3 py-2 text-xs font-extrabold text-amber-700">{fmtKESFull(upcomingTotal)}</td>
+                      <td colSpan={2} />
+                    </tr>
+                  )}
                 </tfoot>
               )}
             </table>

@@ -43,7 +43,13 @@ export interface Arrear {
   paid: number;
   /** amount still owed on this instalment */
   remaining: number;
-  status: "paid" | "unpaid";
+  /**
+   * paid     — missed the deadline, settled later
+   * unpaid   — missed the deadline, still owed (an arrear / debtor)
+   * upcoming — deadline is today or later and not yet fully paid (not a default yet;
+   *            only returned when `includeUpcomingUntil` is passed)
+   */
+  status: "paid" | "unpaid" | "upcoming";
   /** date the instalment became fully covered (late), if it has been */
   clearedOn: string | null;
 }
@@ -71,8 +77,17 @@ export function monthlyRepayment(plot: ArrearPlot): number {
   return price / Math.max(1, Number(plot.loan_duration_months ?? 12) || 12);
 }
 
-/** All arrears (paid and unpaid) for one plot, oldest first. */
-export function computePlotArrears(plot: ArrearPlot, payments: ArrearPayment[], today = todayEAT()): Arrear[] {
+/**
+ * All arrears (paid and unpaid) for one plot, oldest first.
+ * Pass `includeUpcomingUntil` (YYYY-MM-DD) to also get instalments due between
+ * today and that date which are not yet fully paid, with status "upcoming".
+ */
+export function computePlotArrears(
+  plot: ArrearPlot,
+  payments: ArrearPayment[],
+  today = todayEAT(),
+  options: { includeUpcomingUntil?: string } = {},
+): Arrear[] {
   const price = Number(plot.price ?? 0);
   const monthly = monthlyRepayment(plot);
   const anchor = String(plot.deadline ?? "").slice(0, 10);
@@ -121,7 +136,25 @@ export function computePlotArrears(plot: ArrearPlot, payments: ArrearPayment[], 
       if (paid >= inst.amount - 0.005) clearedOn = pmts[pi].date;
       if (left <= 0.005) { pi++; left = pmts[pi]?.amount ?? 0; }
     }
-    if (inst.dueDate >= today) continue; // deadline not passed yet — not an arrear
+    if (inst.dueDate >= today) {
+      // Deadline not passed yet — not an arrear. Optionally report it as upcoming.
+      const until = options.includeUpcomingUntil;
+      if (until && inst.dueDate <= until && clearedOn === null) {
+        result.push({
+          plotId: Number(plot.id),
+          plotNumber: plot.plot_number,
+          period: inst.period,
+          monthLabel: inst.monthLabel,
+          dueDate: inst.dueDate,
+          amount: inst.amount,
+          paid,
+          remaining: Math.max(0, inst.amount - paid),
+          status: "upcoming",
+          clearedOn: null,
+        });
+      }
+      continue;
+    }
     if (inst.dueDate < ARREARS_START_DATE) continue; // before arrears rules took effect
     const onTime = clearedOn !== null && clearedOn <= inst.dueDate;
     if (onTime) continue;

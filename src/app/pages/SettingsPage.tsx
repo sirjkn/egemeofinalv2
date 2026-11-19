@@ -5496,6 +5496,13 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
       vars: ["name", "amount", "dueDate", "arrears", "plotNumber"],
       example: { name: "John", amount: "KES 25,000", dueDate: "10 Dec 2026", arrears: "KES 25,000", plotNumber: "14" },
     },
+    {
+      id: SMS_TRIGGERS.upcomingNotice,
+      label: "Upcoming Repayment Notice", icon: "📅",
+      desc: "Sent when an admin taps Notify on an upcoming (not yet due) repayment in the Arrears report",
+      vars: ["name", "amount", "dueDate", "plotNumber"],
+      example: { name: "John", amount: "KES 25,000", dueDate: "30 Nov 2026", plotNumber: "14" },
+    },
   ];
 
   return (
