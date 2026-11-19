@@ -2121,6 +2121,7 @@ const ALL_MODULES = [
   { id: "refunds",            label: "Refunds",             color: "#ef4444" },
   { id: "reports",            label: "Reports",             color: "#3b82f6" },
   { id: "my-plots",           label: "My Plots",            color: "#059669" },
+  { id: "arrears",            label: "Arrears",             color: "#e11d48" },
   { id: "help",               label: "Help & Support",      color: "#8b5cf6" },
 ];
 
@@ -4116,7 +4117,7 @@ type MemberEntry = {
   role: "shareholder" | "client" | "investor";
 };
 
-function LoginAsCard() {
+export function LoginAsCard() {
   const { impersonating, setImpersonating } = useImpersonation();
   const navigate = useNavigate();
   const [members, setMembers] = useState<MemberEntry[]>([]);
@@ -5487,6 +5488,13 @@ function SmsSettingsPage({ onBack }: { onBack: () => void }) {
       desc: "Sent on the plot payment deadline day each month",
       vars: ["name", "plotNumber", "deadlineDay"],
       example: { name: "John", plotNumber: "14", deadlineDay: "16th" },
+    },
+    {
+      id: SMS_TRIGGERS.arrearsNotice,
+      label: "Arrears Notice", icon: "⚠️",
+      desc: "Sent when an admin taps Notify on an unpaid arrear",
+      vars: ["name", "amount", "dueDate", "arrears", "plotNumber"],
+      example: { name: "John", amount: "KES 25,000", dueDate: "10 Dec 2026", arrears: "KES 25,000", plotNumber: "14" },
     },
   ];
 

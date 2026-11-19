@@ -4,7 +4,7 @@ import {
   Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp, AlertTriangle, ListOrdered,
 } from "lucide-react";
 import {
-  contributionsApi, paymentsApi, shareholdersApi, clientsApi, refundsApi,
+  contributionsApi, paymentsApi, shareholdersApi, clientsApi, refundsApi, logActivity,
   PAYMENT_MODES, PAYMENT_PURPOSES,
 } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -15,6 +15,8 @@ import {
 } from "@/lib/pdf";
 import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
+import { computePlotArrears } from "@/lib/arrears";
+import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
 import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 
 type ReportSub = "contributions" | "contributionsList" | "payments" | "refunds" | "shareholders" | "clients" | "summary" | "profits" | "debtors";
@@ -28,12 +30,23 @@ const REPORT_META: Record<ReportSub, { label: string; desc: string; color: strin
   shareholders:  { label: "Shareholders List",     desc: "All shareholders with savings",                color: "#6366f1", bg: "#eef2ff", icon: <Users size={22} /> },
   clients:       { label: "Clients List",          desc: "All registered clients",                       color: "#a855f7", bg: "#faf5ff", icon: <UserCircle2 size={22} /> },
   profits:       { label: "Profit Distributions",  desc: "All profit payouts by project and member",     color: "#d97706", bg: "#fffbeb", icon: <TrendingUp size={22} /> },
-  debtors:       { label: "Debtors",               desc: "Monthly plot-payment shortfalls and balances", color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
+  debtors:       { label: "Debtors",               desc: "Plot arrears: monthly repayments missed by the deadline", color: "#dc2626", bg: "#fef2f2", icon: <AlertTriangle size={22} /> },
 };
 
-function ReportsPage() {
+/** Arrear row the Debtors report hands to the payment modal. */
+export interface ArrearPayRequest {
+  plot: { id: number; plot_number: string; price: number; paid_amount: number; projectName: string };
+  member: { id: number; name: string; phone?: string; type: "shareholder" | "client" };
+  amount: number;
+  monthLabel: string;
+}
+
+/** Payment modal supplied by App.tsx (kept there to reuse its M-Pesa flow without a circular import). */
+export type ArrearPayComponent = React.ComponentType<{ request: ArrearPayRequest; onClose: () => void; onPaid: () => void }>;
+
+function ReportsPage({ ArrearPay }: { ArrearPay?: ArrearPayComponent } = {}) {
   const [sub, setSub] = useState<ReportSub | null>(null);
-  if (sub) return <ReportViewPage type={sub} onBack={() => setSub(null)} />;
+  if (sub) return <ReportViewPage type={sub} onBack={() => setSub(null)} ArrearPay={ArrearPay} />;
 
   return (
     <div className="h-full overflow-auto pb-20 md:pb-0" style={{ background: "var(--background)" }}>
@@ -68,7 +81,7 @@ function ReportsPage() {
   );
 }
 
-function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void }) {
+function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: () => void; ArrearPay?: ArrearPayComponent }) {
   const meta = REPORT_META[type];
 
   // ── shared filter state ──────────────────────────────────────────────────
@@ -96,6 +109,31 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   const [debtorClients, setDebtorClients] = useState<{ id: number; name: string; member_number: string | number; phone?: string }[]>([]);
   const [plotF, setPlotF] = useState("");
   const [plotOptions, setPlotOptions] = useState<{ id: number; project_id: number; plot_number: string }[]>([]);
+  // ── debtors (arrears) filter state — unpaid by default ──────────────────
+  const [arrearStatusF, setArrearStatusF] = useState<"unpaid" | "paid" | "">("unpaid");
+  const [payRequest, setPayRequest] = useState<ArrearPayRequest | null>(null);
+  const [notifyState, setNotifyState] = useState<Record<string, { status: "sending" | "sent" | "error"; message?: string }>>({});
+
+  // Send the arrears-notice SMS for one unpaid arrear.
+  const notifyArrear = async (row: any) => {
+    const phone = row.shareholder?.phone;
+    if (!phone) { setNotifyState((s) => ({ ...s, [row.key]: { status: "error", message: "No phone number" } })); return; }
+    setNotifyState((s) => ({ ...s, [row.key]: { status: "sending" } }));
+    try {
+      const message = smsTemplates.arrearsNotice(
+        row.shareholder?.name ?? "Member",
+        fmtKESFull(Number(row.amount)),
+        fmtDate(row.dueDate),
+        fmtKESFull(Number(row.remaining)),
+        String(row.plotNumber ?? ""),
+      );
+      await sendSms(phone, message, SMS_TRIGGERS.arrearsNotice);
+      logActivity({ category: "plot", action: "notify", description: `Arrears notice (${row.monthLabel}, plot ${row.plotNumber}) sent to ${row.shareholder?.name ?? "member"}`, meta: { plot_id: row.plotId, period: row.period, amount: row.remaining } });
+      setNotifyState((s) => ({ ...s, [row.key]: { status: "sent" } }));
+    } catch (e: any) {
+      setNotifyState((s) => ({ ...s, [row.key]: { status: "error", message: e?.message ?? "SMS failed" } }));
+    }
+  };
 
   const [rows, setRows]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,20 +158,14 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     Promise.all(requests).catch(() => {});
   }, [type]);
 
-  useEffect(() => {
-    if (type !== "debtors" || dateFrom || dateTo) return;
-    const now = new Date();
-    setDateFrom(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`);
-    setDateTo(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()).padStart(2, "0")}`);
-  }, [type, dateFrom, dateTo]);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
       if (type === "debtors") {
+        // One row per arrear: a monthly repayment not paid on or before its deadline.
         let plotsQuery = supabase
           .from("plots")
-          .select("id,plot_number,project_id,assigned_to_id,assigned_to_type,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status,created_at")
+          .select("id,plot_number,project_id,assigned_to_id,assigned_to_type,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status")
           .not("assigned_to_id", "is", null)
           .in("status", ["assigned", "sold"]);
         if (shareholderF) {
@@ -144,82 +176,56 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
         }
         if (projectF) plotsQuery = plotsQuery.eq("project_id", Number(projectF));
         if (plotF) plotsQuery = plotsQuery.eq("id", Number(plotF));
-        const { data: debtPlots, error: plotError } = await plotsQuery.order("deadline", { ascending: true, nullsFirst: false });
+        const { data: debtPlots, error: plotError } = await plotsQuery;
         if (plotError) throw new Error(plotError.message);
 
+        // Plot payments, paged (Supabase returns at most 1000 rows per request).
         const plotIds = (debtPlots ?? []).map((plot: any) => Number(plot.id));
-        const { data: paymentRows, error: paymentError } = plotIds.length
-          ? await supabase.from("plot_payments").select("plot_id,amount,payment_date,created_at").in("plot_id", plotIds)
-          : { data: [], error: null };
-        if (paymentError) throw new Error(paymentError.message);
-        const paidByPlot: Record<number, number> = {};
-        for (const payment of paymentRows ?? []) {
-          const id = Number(payment.plot_id);
-          paidByPlot[id] = (paidByPlot[id] ?? 0) + Number(payment.amount);
+        const paymentRows: any[] = [];
+        if (plotIds.length) {
+          const PAGE = 1000;
+          for (let from = 0; ; from += PAGE) {
+            const { data, error } = await supabase.from("plot_payments")
+              .select("id,plot_id,amount,payment_date,created_at").in("plot_id", plotIds)
+              .order("id").range(from, from + PAGE - 1);
+            if (error) throw new Error(error.message);
+            paymentRows.push(...(data ?? []));
+            if (!data || data.length < PAGE) break;
+          }
         }
-        const shareholderMap = Object.fromEntries(shareholders.map((shareholder) => [shareholder.id, shareholder]));
-        const clientMap = Object.fromEntries(debtorClients.map((client) => [client.id, client]));
-        const projectMap = Object.fromEntries(projects.map((project) => [project.id, project]));
-        const start = dateFrom ? new Date(`${dateFrom}T00:00:00`) : new Date();
-        const end = dateTo ? new Date(`${dateTo}T23:59:59`) : start;
-        const periods: Array<{ year: number; month: number; label: string }> = [];
-        const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-        const last = new Date(end.getFullYear(), end.getMonth(), 1);
-        while (cursor <= last && periods.length < 120) {
-          periods.push({
-            year: cursor.getFullYear(),
-            month: cursor.getMonth(),
-            label: `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`,
-          });
-          cursor.setMonth(cursor.getMonth() + 1);
-        }
-        const paymentsByPlot: Record<number, any[]> = {};
-        for (const payment of paymentRows ?? []) {
-          const id = Number(payment.plot_id);
-          if (!paymentsByPlot[id]) paymentsByPlot[id] = [];
-          paymentsByPlot[id].push(payment);
-        }
-        const debtorRows = (debtPlots ?? []).flatMap((plot: any) => {
-          const price = Number(plot.price ?? 0);
-          const historyPaid = paidByPlot[Number(plot.id)];
-          const allTimePaid = historyPaid == null ? Number(plot.paid_amount ?? 0) : historyPaid;
-          const minimumDue = Number(plot.min_monthly_payment ?? 0) > 0
-            ? Number(plot.min_monthly_payment)
-            : price / Math.max(1, Number(plot.loan_duration_months ?? 12));
-          const deadlineDay = Math.max(1, Number(String(plot.deadline ?? "").split("-")[2] || 1));
+
+        const shareholderMap = Object.fromEntries(shareholders.map((m) => [m.id, m]));
+        const clientMap = Object.fromEntries(debtorClients.map((m) => [m.id, m]));
+        const projectMap = Object.fromEntries(projects.map((pr) => [pr.id, pr]));
+        const arrearRows = (debtPlots ?? []).flatMap((plot: any) => {
           const member = plot.assigned_to_type === "client"
             ? clientMap[Number(plot.assigned_to_id)] ?? null
             : shareholderMap[Number(plot.assigned_to_id)] ?? null;
-          return periods.map((period) => {
-            const daysInMonth = new Date(period.year, period.month + 1, 0).getDate();
-            const deadlineDate = new Date(period.year, period.month, Math.min(deadlineDay, daysInMonth), 23, 59, 59);
-            const paidBeforeDeadline = (paymentsByPlot[Number(plot.id)] ?? []).reduce((sum, payment) => {
-              const paymentDate = new Date(`${String(payment.payment_date ?? payment.created_at).slice(0, 10)}T12:00:00`);
-              const inMonth = paymentDate.getFullYear() === period.year && paymentDate.getMonth() === period.month;
-              return inMonth && paymentDate <= deadlineDate ? sum + Number(payment.amount) : sum;
-            }, 0);
-            const balance = Math.max(0, price - allTimePaid);
-            const due = Math.min(balance, Math.max(0, minimumDue - paidBeforeDeadline));
-            return {
-              ...plot,
-              shareholder: member,
-              memberType: plot.assigned_to_type,
-              project: projectMap[Number(plot.project_id)] ?? null,
-              price,
-              allTimePaid,
-              period: period.label,
-              periodYear: period.year,
-              periodMonth: period.month + 1,
-              monthlyDue: minimumDue,
-              paidBeforeDeadline,
-              due,
-              balance,
-              monthlyDeadline: deadlineDate.toISOString().slice(0, 10),
-              progress: price > 0 ? Math.min(100, Math.round((allTimePaid / price) * 100)) : 0,
-            };
-          });
-        }).filter((row: any) => row.due > 0 && row.balance > 0);
-        setRows(debtorRows);
+          const project = projectMap[Number(plot.project_id)] ?? null;
+          return computePlotArrears(plot, paymentRows).map((a) => ({
+            ...a,
+            key: `${a.plotId}-${a.period}`,
+            plot,
+            shareholder: member,
+            memberType: plot.assigned_to_type,
+            project,
+            payable: false,
+          }));
+        }).sort((a: any, b: any) => a.period.localeCompare(b.period)
+          || String(a.shareholder?.name ?? "").localeCompare(String(b.shareholder?.name ?? ""))
+          || String(a.plotNumber).localeCompare(String(b.plotNumber)));
+
+        // Only the oldest unpaid month of each plot is payable (payments apply oldest-first).
+        // Decided before filtering so a date filter can't make a newer month payable.
+        const seenPlots = new Set<number>();
+        for (const row of arrearRows) {
+          if (row.status !== "unpaid" || seenPlots.has(row.plotId)) continue;
+          seenPlots.add(row.plotId);
+          row.payable = true;
+        }
+        setRows(arrearRows
+          .filter((row: any) => !arrearStatusF || row.status === arrearStatusF)
+          .filter((row: any) => (!dateFrom || row.dueDate >= dateFrom) && (!dateTo || row.dueDate <= dateTo)));
 
       } else if (type === "profits") {
         let q = supabase
@@ -390,7 +396,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       }
     } catch { setRows([]); }
     finally { setLoading(false); }
-  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, shareholders, debtorClients, projects]);
+  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, arrearStatusF, shareholders, debtorClients, projects]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -439,7 +445,7 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           return memberName.toLowerCase().includes(q) || `EW#${memberNo}`.includes(q) || (r.project?.project_name ?? "").toLowerCase().includes(q);
         }
         if (type === "debtors") {
-          return `${r.shareholder?.name ?? ""} ${r.shareholder?.member_number ?? ""} ${r.project?.project_name ?? ""} ${r.plot_number ?? ""}`.toLowerCase().includes(q);
+          return `${r.shareholder?.name ?? ""} ${r.shareholder?.member_number ?? ""} ${r.project?.project_name ?? ""} ${r.plotNumber ?? ""} ${r.monthLabel ?? ""}`.toLowerCase().includes(q);
         }
         return true;
       })
@@ -465,25 +471,21 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
           : shareholders.find((member) => `shareholder:${member.id}` === shareholderF)?.name}`,
         memberTypeF && `Member Type: ${memberTypeF === "client" ? "Client" : "Shareholder"}`,
         plotF && `Plot: ${plotOptions.find((p) => String(p.id) === plotF)?.plot_number ?? plotF}`,
+        type === "debtors" && `Status: ${arrearStatusF === "unpaid" ? "Not paid" : arrearStatusF === "paid" ? "Paid" : "All"}`,
       ].filter(Boolean).join(" · ") || "All records";
 
       if (type === "debtors") {
-        const uniquePlotBalances = new Map<number, number>();
-        filtered.forEach((row: any) => uniquePlotBalances.set(Number(row.id), Number(row.balance)));
-        const totalDebt = Array.from(uniquePlotBalances.values()).reduce((sum, balance) => sum + balance, 0);
         downloadReportPdf([{
-          title: "Monthly Plot Debtors",
-          headers: ["Member", "Type", "Member No.", "Phone", "Project", "Plot", "Payment Month", "Deadline", "Minimum Payment", "Paid Before Deadline", "Due", "Plot Balance", "Progress"],
+          title: "Plot Arrears",
+          headers: ["Member", "Member No.", "Phone", "Month", "Project", "Plot Number", "Monthly Repayment", "Outstanding", "Paid Status"],
           rows: filtered.map((row: any) => [
-            row.shareholder?.name ?? "—", row.memberType === "client" ? "Client" : "Shareholder",
-            row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
-            row.shareholder?.phone ?? "—", row.project?.project_name ?? "—", row.plot_number ?? "—",
-            row.period, fmtDate(row.monthlyDeadline), Number(row.monthlyDue).toLocaleString("en-KE"),
-            Number(row.paidBeforeDeadline).toLocaleString("en-KE"),
-            Number(row.due).toLocaleString("en-KE"), Number(row.balance).toLocaleString("en-KE"), `${row.progress}%`,
+            row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
+            row.shareholder?.phone ?? "—", row.monthLabel, row.project?.project_name ?? "—", row.plotNumber,
+            Number(row.amount).toLocaleString("en-KE"), Number(row.remaining).toLocaleString("en-KE"),
+            row.status === "paid" ? "Paid" : "Not paid",
           ]),
-          total: totalDebt,
-        }], "Debtors Report", co, filterStr);
+          total: filtered.reduce((sum: number, row: any) => sum + Number(row.remaining), 0),
+        }], "Debtors Report — Plot Arrears", co, filterStr);
 
       } else if (type === "contributionsList") {
         downloadReportPdf([{
@@ -585,13 +587,12 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
   const handleExcel = () => {
     const stamp = new Date().toISOString().slice(0, 10);
     if (type === "debtors") {
-      downloadExcel(`debtors-report-${stamp}`, "Debtors",
-        ["Member", "Type", "Member No.", "Phone", "Project", "Plot", "Payment Month", "Deadline", "Minimum Payment", "Paid Before Deadline", "Due", "Plot Balance", "Progress"],
+      downloadExcel(`debtors-arrears-${stamp}`, "Arrears",
+        ["Member", "Member No.", "Phone", "Month", "Due Date", "Project", "Plot Number", "Monthly Repayment", "Outstanding", "Paid Status"],
         filtered.map((row: any) => [
-          row.shareholder?.name ?? "—", row.memberType === "client" ? "Client" : "Shareholder",
-          row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
-          row.shareholder?.phone ?? "—", row.project?.project_name ?? "—", row.plot_number ?? "—",
-          row.period, fmtDate(row.monthlyDeadline), Number(row.monthlyDue), Number(row.paidBeforeDeadline), Number(row.due), Number(row.balance), row.progress / 100,
+          row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
+          row.shareholder?.phone ?? "—", row.monthLabel, fmtDate(row.dueDate), row.project?.project_name ?? "—", row.plotNumber,
+          Number(row.amount), Number(row.remaining), row.status === "paid" ? "Paid" : "Not paid",
         ]));
     } else if (type === "contributionsList") {
       downloadExcel(`contributions-list-${stamp}`, "Contributions List",
@@ -747,6 +748,13 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
       )}
       {type === "debtors" && (
         <>
+          <select value={arrearStatusF} onChange={(e) => setArrearStatusF(e.target.value as "unpaid" | "paid" | "")}
+            className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white"
+            style={{ borderColor: arrearStatusF === "unpaid" ? "#ef4444" : arrearStatusF === "paid" ? "#16a34a" : "var(--border)", color: arrearStatusF === "unpaid" ? "#dc2626" : arrearStatusF === "paid" ? "#15803d" : undefined }}>
+            <option value="unpaid">Not paid</option>
+            <option value="paid">Paid</option>
+            <option value="">All arrears</option>
+          </select>
           <select value={memberTypeF} onChange={(e) => {
             const next = e.target.value as "" | "shareholder" | "client";
             setMemberTypeF(next);
@@ -782,25 +790,16 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
     if (loading) return <div className="flex items-center justify-center py-16"><Loader2 size={22} className="animate-spin text-gray-300" /></div>;
 
     if (type === "debtors") {
-      const totalMinimum = filtered.reduce((sum: number, row: any) => sum + Number(row.monthlyDue), 0);
-      const totalPaid = filtered.reduce((sum: number, row: any) => sum + Number(row.paidBeforeDeadline), 0);
-      const monthlyDebts = filtered.reduce((sum: number, row: any) => sum + Number(row.due), 0);
-      const uniquePlots = new Map<number, any>();
-      filtered.forEach((row: any) => uniquePlots.set(Number(row.id), row));
-      const totalPlotsDue = Array.from(uniquePlots.values()).reduce((sum: number, row: any) => sum + Number(row.balance), 0);
-      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
-      const debtorsToday = new Set(
-        filtered
-          .filter((row: any) => row.monthlyDeadline <= today && Number(row.due) > 0)
-          .map((row: any) => `${row.memberType}:${row.assigned_to_id}`),
-      ).size;
+      const unpaidRows = filtered.filter((row: any) => row.status === "unpaid");
+      const totalOutstanding = unpaidRows.reduce((sum: number, row: any) => sum + Number(row.remaining), 0);
+      const debtorCount = new Set(unpaidRows.map((row: any) => `${row.memberType}:${row.plot?.assigned_to_id}`)).size;
       return (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-5 py-4 border-b bg-slate-50" style={{ borderColor: "var(--border)" }}>
             {[
-              { label: "Total Plots Due Amount", value: fmtKESFull(totalPlotsDue), color: "#dc2626", sub: `${uniquePlots.size} plot${uniquePlots.size === 1 ? "" : "s"} with balances` },
-              { label: "Monthly Debts", value: fmtKESFull(monthlyDebts), color: "#d97706", sub: `${fmtKESFull(totalPaid)} paid before deadline` },
-              { label: "Total Debtors Today", value: String(debtorsToday), color: "#1e3a5f", sub: `Based on deadline as at ${fmtDate(today)}` },
+              { label: "Total Unpaid Arrears", value: fmtKESFull(totalOutstanding), color: "#dc2626", sub: "Outstanding on missed months" },
+              { label: "Unpaid Months", value: String(unpaidRows.length), color: "#d97706", sub: `${filtered.length - unpaidRows.length} arrear${filtered.length - unpaidRows.length === 1 ? "" : "s"} since paid` },
+              { label: "Debtors", value: String(debtorCount), color: "#1e3a5f", sub: "Members with unpaid arrears" },
             ].map((stat) => (
               <div key={stat.label} className="rounded-xl border bg-white px-4 py-3.5" style={{ borderColor: "var(--border)" }}>
                 <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{stat.label}</p>
@@ -810,33 +809,63 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
             ))}
           </div>
           <div className="overflow-x-auto flex-1">
-            <table className="w-full text-sm min-w-[1250px]">
+            <table className="w-full text-sm min-w-[980px]">
               <thead style={{ background: "#1e3a5f" }}>
-                <tr>{["Member", "Type", "No.", "Phone", "Project", "Plot", "Payment Month", "Deadline", "Minimum Payment", "Paid", "Due", "Balance", "Progress"].map((heading) => (
+                <tr>{["Member", "No.", "Month", "Project", "Plot Number", "Monthly Repayment", "Paid Status", "Action"].map((heading) => (
                   <th key={heading} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-white">{heading}</th>
                 ))}</tr>
               </thead>
               <tbody>
                 {filtered.map((row: any, index: number) => (
-                  <tr key={`${row.id}-${row.periodYear}-${row.periodMonth}`} className="border-t hover:bg-red-50/40" style={{ borderColor: "var(--border)", background: index % 2 === 0 ? "#fff" : "#f8fafc" }}>
-                    <td className="px-3 py-2 text-xs font-semibold text-slate-800">{row.shareholder?.name ?? "Unknown"}</td>
-                    <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${row.memberType === "client" ? "bg-amber-50 text-amber-700" : "bg-indigo-50 text-indigo-700"}`}>{row.memberType === "client" ? "Client" : "Shareholder"}</span></td>
-                    <td className="px-3 py-2 text-xs font-bold text-indigo-600">{row.memberType === "client" ? row.shareholder?.member_number ?? "—" : `EW#${row.shareholder?.member_number ?? "—"}`}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">{row.shareholder?.phone ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.project?.project_name ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs font-bold text-blue-700">{row.plot_number ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.period}</td>
-                    <td className="px-3 py-2 text-xs text-slate-500">{fmtDate(row.monthlyDeadline)}</td>
-                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{fmtKESFull(Number(row.monthlyDue))}</td>
-                    <td className="px-3 py-2 text-xs font-bold text-emerald-600">{fmtKESFull(Number(row.paidBeforeDeadline))}</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-orange-600">{fmtKESFull(Number(row.due))}</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-red-600">{fmtKESFull(Number(row.balance))}</td>
+                  <tr key={row.key} className="border-t hover:bg-red-50/40" style={{ borderColor: "var(--border)", background: index % 2 === 0 ? "#fff" : "#f8fafc" }}>
                     <td className="px-3 py-2">
-                      <div className="flex min-w-28 items-center gap-2">
-                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${row.progress}%` }} />
-                        </div>
-                        <span className="text-[10px] font-bold text-emerald-700">{row.progress}%</span>
+                      <p className="text-xs font-semibold text-slate-800">{row.shareholder?.name ?? "Unknown"}</p>
+                      <p className="text-[10px] text-slate-400">{row.memberType === "client" ? "Client" : "Shareholder"}{row.shareholder?.phone ? ` · ${row.shareholder.phone}` : ""}</p>
+                    </td>
+                    <td className="px-3 py-2 text-xs font-bold text-indigo-600">{row.memberType === "client" ? row.shareholder?.member_number ?? "—" : `EW#${row.shareholder?.member_number ?? "—"}`}</td>
+                    <td className="px-3 py-2">
+                      <p className="text-xs font-semibold text-slate-700">{row.monthLabel}</p>
+                      <p className="text-[10px] text-slate-400">Due {fmtDate(row.dueDate)}</p>
+                    </td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.project?.project_name ?? "—"}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-blue-700">{row.plotNumber}</td>
+                    <td className="px-3 py-2">
+                      <p className="text-xs font-bold text-slate-800">{fmtKESFull(Number(row.amount))}</p>
+                      {row.status === "unpaid" && Number(row.paid) > 0 && <p className="text-[10px] text-rose-600">{fmtKESFull(Number(row.remaining))} left</p>}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.status === "paid" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                        {row.status === "paid" ? "Paid" : "Not paid"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                      {row.status === "paid"
+                        ? <span className="text-[10px] text-slate-400">{row.clearedOn ? `Paid ${fmtDate(row.clearedOn)}` : "—"}</span>
+                        : row.payable && ArrearPay && row.shareholder
+                          ? <button onClick={() => setPayRequest({
+                              plot: { id: row.plotId, plot_number: row.plotNumber, price: Number(row.plot?.price ?? 0), paid_amount: Number(row.plot?.paid_amount ?? 0), projectName: row.project?.project_name ?? "" },
+                              member: { id: Number(row.plot?.assigned_to_id), name: row.shareholder.name, phone: row.shareholder.phone, type: row.memberType },
+                              amount: Number(row.remaining),
+                              monthLabel: row.monthLabel,
+                            })}
+                              className="rounded-lg px-3 py-1.5 text-[11px] font-bold text-white hover:opacity-90" style={{ background: "#16a34a" }}>Pay</button>
+                          : <span className="text-[10px] text-slate-400">{row.payable ? "—" : "Pay earlier month first"}</span>}
+                      {row.status === "unpaid" && (() => {
+                        const n = notifyState[row.key];
+                        return (
+                          <button onClick={() => notifyArrear(row)} disabled={n?.status === "sending"}
+                            title={n?.status === "error" ? n.message : "Send an arrears reminder SMS to this member"}
+                            className="rounded-lg border px-3 py-1.5 text-[11px] font-bold transition-colors disabled:opacity-60"
+                            style={n?.status === "sent"
+                              ? { borderColor: "#86efac", background: "#f0fdf4", color: "#15803d" }
+                              : n?.status === "error"
+                                ? { borderColor: "#fecaca", background: "#fef2f2", color: "#b91c1c" }
+                                : { borderColor: "#fcd34d", background: "#fffbeb", color: "#b45309" }}>
+                            {n?.status === "sending" ? "Sending…" : n?.status === "sent" ? "Notified ✓" : n?.status === "error" ? "Retry" : "Notify"}
+                          </button>
+                        );
+                      })()}
                       </div>
                     </td>
                   </tr>
@@ -845,18 +874,18 @@ function ReportViewPage({ type, onBack }: { type: ReportSub; onBack: () => void 
               {filtered.length > 0 && (
                 <tfoot>
                   <tr className="border-t-2" style={{ background: "#fef2f2", borderColor: "#fecaca" }}>
-                    <td colSpan={8} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Totals</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-slate-800">{fmtKESFull(totalMinimum)}</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-emerald-700">{fmtKESFull(totalPaid)}</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-orange-700">{fmtKESFull(monthlyDebts)}</td>
-                    <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalPlotsDue)}</td>
-                    <td />
+                    <td colSpan={5} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Total Unpaid</td>
+                    <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalOutstanding)}</td>
+                    <td colSpan={2} />
                   </tr>
                 </tfoot>
               )}
             </table>
-            {filtered.length === 0 && <div className="py-14 text-center"><AlertTriangle size={28} className="mx-auto mb-2 text-slate-300" /><p className="text-sm text-slate-400">No outstanding plot debt matches the selected filters.</p></div>}
+            {filtered.length === 0 && <div className="py-14 text-center"><AlertTriangle size={28} className="mx-auto mb-2 text-slate-300" /><p className="text-sm text-slate-400">No arrears match the selected filters.</p></div>}
           </div>
+          {payRequest && ArrearPay && (
+            <ArrearPay request={payRequest} onClose={() => setPayRequest(null)} onPaid={() => { setPayRequest(null); load(); }} />
+          )}
         </>
       );
     }

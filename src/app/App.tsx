@@ -10,7 +10,7 @@ import {
   Loader2, CreditCard as IdCard, Wallet, Camera, ImagePlus,
   Building2, FileSpreadsheet, Wrench, UploadCloud, Download,
   XCircle, CheckCircle, BellRing, Home, ClipboardPaste, FileDown, Filter, LogOut, Eye, Printer, List,
-  ShieldAlert,
+  ShieldAlert, LogIn, AlertTriangle, Lock,
 } from "lucide-react";
 import {
   shareholdersApi, clientsApi, investorsApi, contributionsApi, refundsApi, paymentsApi,
@@ -33,8 +33,8 @@ import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase";
 import { ProjectsPage, AssignedPlotCard, PlotPaymentModal } from "@/app/pages/ProjectsPage";
 import { LeadsPage } from "@/app/pages/LeadsPage";
-import { ReportsPage } from "@/app/pages/ReportsPage";
-import { SettingsPage, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
+import { ReportsPage, type ArrearPayRequest } from "@/app/pages/ReportsPage";
+import { SettingsPage, LoginAsCard, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
 import { THIS_YEAR, CY, YEAR_OPTS, MONTHS, CURRENT_YEAR, YEAR_RANGE, initials, fmtKES, fmtKESFull, fmtDate, fmtDateTime } from "@/app/shared";
 import { sendSms, smsTemplates, SMS_TRIGGERS, loadSmsSettingsFromSupabase } from "@/lib/sms";
 import { parseMpesaMessage as _parseMpesaMsg, getPaymentSettings, loadPaymentSettingsFromSupabase, loadDarajaConfigFromSupabase } from "@/lib/mpesa";
@@ -43,6 +43,7 @@ import { downloadExcel } from "@/lib/excel";
 import { toast, Toaster } from "sonner";
 import { LoginPage, SetPasswordPage, fetchProfile, type UserProfile, phoneToEmail } from "@/app/pages/AuthPage";
 import { ImpersonationCtx, useImpersonation } from "@/lib/impersonation";
+import { computePlotArrears, unpaidArrearsTotal, type Arrear } from "@/lib/arrears";
 import { ShareholderPortal, ClientPortal, InvestorPortal } from "@/app/pages/MemberPortal";
 import {
   BarChart as RechartBarChart, Bar,
@@ -56,7 +57,7 @@ import {
 type Module =
   | "dashboard" | "shareholders" | "clients" | "contributions"
   | "projects" | "investors" | "payments" | "refunds"
-  | "reports" | "settings" | "my-plots" | "help"
+  | "reports" | "settings" | "my-plots" | "arrears" | "help"
   | "mpesa-transactions" | "leads";
 
 type PreviewRole = "admin" | "shareholder" | "client";
@@ -128,8 +129,8 @@ function useSystemLive() {
 
 const ROLE_NAV: Record<string, Module[]> = {
   admin:       ["dashboard","shareholders","clients","contributions","projects","investors","payments","refunds","leads","reports","mpesa-transactions","settings"],
-  shareholder: ["dashboard","contributions","projects","my-plots","payments","settings"],
-  client:      ["dashboard","my-plots","refunds","settings"],
+  shareholder: ["dashboard","contributions","projects","my-plots","arrears","settings"],
+  client:      ["dashboard","my-plots","arrears","refunds","settings"],
   investor:    ["dashboard","projects","my-plots","settings"],
   reception:   ["dashboard","shareholders","clients","contributions","projects","investors","payments","refunds","leads","reports","mpesa-transactions"],
 };
@@ -219,6 +220,7 @@ const navItems: NavItem[] = [
   { id: "reports",      label: "Reports",        icon: <BarChart2 size={19} color="#fff" />,         iconBg: "#3b82f6", hasChevron: true },
   { id: "settings",     label: "Settings",       icon: <SlidersHorizontal size={19} color="#fff" />, iconBg: "#64748b", hasChevron: true },
   { id: "my-plots",     label: "My Plots",       icon: <MapPin size={19} color="#fff" />,            iconBg: "#059669" },
+  { id: "arrears",      label: "Arrears",        icon: <AlertTriangle size={19} color="#fff" />,     iconBg: "#e11d48" },
   { id: "help",         label: "Help & Support", icon: <HelpCircle size={19} color="#fff" />,        iconBg: "#8b5cf6" },
 ];
 
@@ -2751,6 +2753,11 @@ const adminDashMods = [
 
 function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const navigate = useNavigate();
+  // Dev-only "Login As" shortcut. import.meta.env.DEV is false in production builds,
+  // so this block is removed from the deployed app entirely.
+  const { realProfile } = useImpersonation();
+  const showDevLoginAs = import.meta.env.DEV && realProfile?.role === "admin";
+  const [devLoginAsOpen, setDevLoginAsOpen] = useState(false);
   const [stats, setStats] = useState<{ shareholders: number; clients: number; investors: number; totalCollected: number; thisMonth: number; overdueCount: number; plots: number; assignedPlots: number } | null>(null);
   const [monthlyCollections, setMonthlyCollections] = useState<Array<{ month: string; amount: number }>>([]);
   const [memberDist, setMemberDist] = useState<Array<{ name: string; value: number; color: string }>>([]);
@@ -3217,6 +3224,18 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   return (
     <>
     <div className="p-4 md:p-6 flex flex-col gap-6 min-h-0">
+      {import.meta.env.DEV && showDevLoginAs && (
+        <div className="rounded-2xl border border-dashed" style={{ borderColor: "#f59e0b", background: "#fffbeb" }}>
+          <button onClick={() => setDevLoginAsOpen((open) => !open)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left">
+            <span className="flex items-center gap-2 text-sm font-bold" style={{ color: "#b45309" }}>
+              <LogIn size={15} /> Login As a member <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: "#fde68a" }}>dev only</span>
+            </span>
+            <ChevronDown size={16} style={{ color: "#b45309", transform: devLoginAsOpen ? "rotate(180deg)" : undefined }} />
+          </button>
+          {devLoginAsOpen && <div className="px-3 pb-3"><LoginAsCard /></div>}
+        </div>
+      )}
       <div className="flex flex-col lg:flex-row gap-6 min-h-0">
 
       {/* ── Left column ── */}
@@ -3782,6 +3801,24 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     deadline: string; paidBeforeDeadline: number; due: number; fullyPaid: boolean;
   }>>([]);
   const [showMonthlyDues, setShowMonthlyDues] = useState(false);
+  // Arrears: instalments not paid on or before their plot deadline.
+  const [memberArrears, setMemberArrears] = useState<Array<Arrear & { projectName: string }>>([]);
+  const [arrearPlots, setArrearPlots] = useState<any[]>([]);
+  const [showArrears, setShowArrears] = useState(false);
+  const [arrearsBlockNotice, setArrearsBlockNotice] = useState(false);
+  const [showArrearsChooser, setShowArrearsChooser] = useState(false);
+  const unpaidArrears = memberArrears.filter((a) => a.status === "unpaid");
+  const unpaidArrearsAmount = unpaidArrearsTotal(memberArrears);
+  // Only the oldest unpaid month of each plot can be paid (payments apply oldest-first).
+  const payableArrearKeys = new Set<string>();
+  {
+    const seenPlots = new Set<number>();
+    for (const a of unpaidArrears) {
+      if (seenPlots.has(a.plotId)) continue;
+      seenPlots.add(a.plotId);
+      payableArrearKeys.add(`${a.plotId}-${a.period}`);
+    }
+  }
   const [paymentStatus, setPaymentStatus] = useState<Array<{ name: string; value: number; color: string }>>([]);
   const [cumulativeSavings, setCumulativeSavings] = useState<Array<{ month: string; total: number }>>([]);
   const [reloadKey, setReloadKey] = useState(0);
@@ -3842,7 +3879,27 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     setPlotPayAmount("");
   };
 
+  // Pay one arrear via M-Pesa STK: reuses the plot payment flow with the
+  // arrear's outstanding amount, so it is recorded like any plot payment.
+  const payArrear = async (arrear: Arrear) => {
+    const plot = arrearPlots.find((p: any) => Number(p.id) === arrear.plotId);
+    if (!plot) return;
+    setShowArrears(false);
+    setArrearsBlockNotice(false);
+    await loadMemberShareholder();
+    setPlotPayTarget({ ...plot, project: plot.project ?? undefined });
+    setPlotPayAmount(String(Math.round(arrear.remaining * 100) / 100));
+    setPayFlowType("plot");
+    setPlotPayStep("method");
+  };
+
   const startPlotPay = () => {
+    // Regular plot payments are blocked until all arrears are cleared.
+    if (unpaidArrears.length > 0) {
+      setShowPayChoice(false);
+      setShowArrearsChooser(true);
+      return;
+    }
     setShowPayChoice(false);
     setPayFlowType("plot");
     setPlotPayStep(memberPlots.length === 1 ? "amount" : "select");
@@ -4035,9 +4092,19 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
           };
         });
         setMonthlyPlotDues(dues);
+
+        // Arrears across all of this member's plots, oldest month first
+        // (payments are applied to the oldest unpaid month).
+        const arrears = plots.flatMap((pl: any) =>
+          computePlotArrears(pl, allPmts ?? []).map((a) => ({ ...a, projectName: pl.project?.project_name ?? "—" })),
+        ).sort((a, b) => a.period.localeCompare(b.period) || a.plotNumber.localeCompare(b.plotNumber));
+        setMemberArrears(arrears);
+        setArrearPlots(plots);
       } else {
         setThisMonthPlotPaid(0);
         setMonthlyPlotDues([]);
+        setMemberArrears([]);
+        setArrearPlots([]);
       }
 
       plots.slice(0, 2).forEach((pl: any) => acts.push({ key: "pl"+pl.id, type: "plot", label: "Plot allocated", amount: Number(pl.price), date: "" }));
@@ -4228,6 +4295,18 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 </div>
                 <div className="text-xs font-semibold text-white">Total Monthly Due</div>
                 <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Tap to view individual plots</div>
+              </button>
+            )}
+            {(isSH || isCL) && memberArrears.length > 0 && (
+              <button onClick={() => { setArrearsBlockNotice(false); setShowArrears(true); }}
+                className="rounded-xl p-4 text-left hover:brightness-105 transition-all active:scale-[0.98]"
+                style={{ background: unpaidArrears.length > 0 ? "#9f1239" : "#059669" }}>
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><AlertTriangle size={17} color="white" /></div>
+                <div className="text-xl font-bold text-white">{unpaidArrears.length > 0 ? fmtKESFull(unpaidArrearsAmount) : "Cleared"}</div>
+                <div className="text-xs font-semibold text-white">Arrears</div>
+                <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>
+                  {unpaidArrears.length > 0 ? `${unpaidArrears.length} unpaid month${unpaidArrears.length !== 1 ? "s" : ""} · Tap to pay` : "All arrears paid · Tap to view"}
+                </div>
               </button>
             )}
           </>}
@@ -4532,9 +4611,11 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                     <MapPin size={22} color={allPaid ? "#9ca3af" : "#059669"} />
                   </div>
                   <div className="flex-1">
-                    <p className="font-bold text-sm" style={{ color: allPaid ? "#9ca3af" : "#1a202c" }}>Pay Plot</p>
-                    <p className="text-xs" style={{ color: allPaid ? "#dc2626" : "#6b7280" }}>
-                      {allPaid
+                    <p className="font-bold text-sm" style={{ color: allPaid ? "#9ca3af" : "#1a202c" }}>{!allPaid && unpaidArrears.length > 0 ? "Pay Plot Arrears" : "Pay Plot"}</p>
+                    <p className="text-xs" style={{ color: allPaid || unpaidArrears.length > 0 ? "#dc2626" : "#6b7280" }}>
+                      {!allPaid && unpaidArrears.length > 0
+                        ? `Clear ${unpaidArrears.length} arrear${unpaidArrears.length !== 1 ? "s" : ""} (${fmtKESFull(unpaidArrearsAmount)}) first`
+                        : allPaid
                         ? (memberPlots.length === 1 ? `${memberPlots[0].plot_number} — Paid in Full` : "All plots paid in full")
                         : (memberPlots.length === 1 ? memberPlots[0].plot_number : `${memberPlots.length} plots — choose one`)}
                     </p>
@@ -4716,6 +4797,81 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
         </div>
       </div>
     )}
+    {showArrearsChooser && (
+      <PayArrearsChooser
+        payable={unpaidArrears.filter((a) => payableArrearKeys.has(`${a.plotId}-${a.period}`))}
+        unpaidCount={unpaidArrears.length}
+        unpaidTotal={unpaidArrearsAmount}
+        onPay={(a) => { setShowArrearsChooser(false); payArrear(a); }}
+        onViewAll={() => { setShowArrearsChooser(false); setArrearsBlockNotice(true); setShowArrears(true); }}
+        onClose={() => setShowArrearsChooser(false)}
+      />
+    )}
+    {/* ── Arrears list ─────────────────────────────────────────────── */}
+    {showArrears && (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }}
+        onClick={(event) => { if (event.target === event.currentTarget) setShowArrears(false); }}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b" style={{ background: "#fff1f2", borderColor: "#fecdd3" }}>
+            <div>
+              <p className="font-bold text-base" style={{ color: "#881337" }}>Arrears</p>
+              <p className="text-xs" style={{ color: "#be123c" }}>Monthly repayments not paid on or before the plot deadline</p>
+            </div>
+            <button onClick={() => setShowArrears(false)} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-rose-100"><X size={16} /></button>
+          </div>
+          {arrearsBlockNotice && unpaidArrears.length > 0 && (
+            <div className="mx-5 mt-4 rounded-xl px-3 py-2.5 text-xs font-semibold" style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }}>
+              Please clear your arrears before making any other plot payment.
+            </div>
+          )}
+          <div className="max-h-[60vh] overflow-auto">
+            {memberArrears.length === 0 ? (
+              <p className="px-5 py-10 text-center text-sm text-gray-400">No arrears. All repayments were made on time.</p>
+            ) : (
+              <table className="w-full text-xs min-w-[560px]">
+                <thead className="sticky top-0" style={{ background: "#1e3a5f" }}>
+                  <tr>{["Month", "Project", "Plot Number", "Monthly Repayment", "Paid Status", "Action"].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-white">{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {memberArrears.map((a, i) => (
+                    <tr key={`${a.plotId}-${a.period}`} className="border-t" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                      <td className="px-3 py-2.5">
+                        <p className="font-semibold text-slate-800">{a.monthLabel}</p>
+                        <p className="text-[10px] text-slate-400">Due {fmtDate(a.dueDate)}</p>
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-600">{a.projectName}</td>
+                      <td className="px-3 py-2.5 font-bold text-blue-700">{a.plotNumber}</td>
+                      <td className="px-3 py-2.5">
+                        <p className="font-bold text-slate-800">{fmtKESFull(a.amount)}</p>
+                        {a.status === "unpaid" && a.paid > 0 && <p className="text-[10px] text-rose-600">{fmtKESFull(a.remaining)} left</p>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${a.status === "paid" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                          {a.status === "paid" ? "Paid" : "Not paid"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {a.status === "unpaid"
+                          ? payableArrearKeys.has(`${a.plotId}-${a.period}`)
+                            ? <button onClick={() => payArrear(a)} className="rounded-lg px-3 py-1.5 text-[11px] font-bold text-white hover:opacity-90" style={{ background: "#16a34a" }}>Pay</button>
+                            : <span className="text-[10px] text-slate-400">Pay earlier month first</span>
+                          : <span className="text-[10px] text-slate-400">{a.clearedOn ? `Paid ${fmtDate(a.clearedOn)}` : "—"}</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="flex items-center justify-between px-5 py-4 border-t" style={{ background: "#fff1f2", borderColor: "#fecdd3" }}>
+            <span className="text-sm font-bold" style={{ color: "#881337" }}>Total Unpaid Arrears</span>
+            <span className="text-lg font-extrabold" style={{ color: "#be123c" }}>{fmtKESFull(unpaidArrearsAmount)}</span>
+          </div>
+        </div>
+      </div>
+    )}
     {showMonthlyDues && (
       <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }}
         onClick={(event) => { if (event.target === event.currentTarget) setShowMonthlyDues(false); }}>
@@ -4743,13 +4899,26 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 </div>
                 {row.fullyPaid ? (
                   <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-[11px] font-semibold text-emerald-700">This plot is fully paid — no monthly dues.</p>
-                ) : (
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
-                    <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="block text-slate-400">Minimum</span><strong className="text-slate-700">{fmtKESFull(row.minimum)}</strong></div>
-                    <div className="rounded-lg bg-emerald-50 px-2 py-1.5"><span className="block text-emerald-500">Paid in time</span><strong className="text-emerald-700">{fmtKESFull(row.paidBeforeDeadline)}</strong></div>
-                    <div className="rounded-lg bg-red-50 px-2 py-1.5"><span className="block text-red-400">Due</span><strong className="text-red-700">{fmtKESFull(row.due)}</strong></div>
-                  </div>
-                )}
+                ) : (() => {
+                  // Oldest unpaid arrear on this plot (payments clear the oldest month first).
+                  const plotArrear = unpaidArrears.find((a) => a.plotId === row.id);
+                  return (
+                    <div className={`mt-2 grid ${plotArrear ? "grid-cols-4" : "grid-cols-3"} gap-2 text-[10px]`}>
+                      <div className="rounded-lg bg-slate-50 px-2 py-1.5"><span className="block text-slate-400">Minimum</span><strong className="text-slate-700">{fmtKESFull(row.minimum)}</strong></div>
+                      <div className="rounded-lg bg-emerald-50 px-2 py-1.5"><span className="block text-emerald-500">Paid in time</span><strong className="text-emerald-700">{fmtKESFull(row.paidBeforeDeadline)}</strong></div>
+                      <div className="rounded-lg bg-red-50 px-2 py-1.5"><span className="block text-red-400">Due</span><strong className="text-red-700">{fmtKESFull(row.due)}</strong></div>
+                      {plotArrear && (
+                        <button onClick={() => { setShowMonthlyDues(false); payArrear(plotArrear); }}
+                          title={`Pay ${plotArrear.monthLabel} arrears (${fmtKESFull(plotArrear.remaining)})`}
+                          className="rounded-lg px-2 py-1.5 text-[11px] font-bold leading-tight text-white hover:opacity-90"
+                          style={{ background: "#16a34a" }}>
+                          Pay Arrears
+                          <span className="block text-[9px] font-semibold opacity-80">{plotArrear.monthLabel}</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
@@ -5007,8 +5176,263 @@ function PlotPaymentsInline({ plotId, refreshKey, plotNumber, projectName, membe
   );
 }
 
+// ─── "Clear arrears first" chooser ───────────────────────────────────────────
+// Shown when a member with unpaid arrears tries to pay for a plot. They must pick
+// an arrear to pay; the regular plot payment stays locked until all are cleared.
+function PayArrearsChooser({ payable, unpaidCount, unpaidTotal, onPay, onViewAll, onClose }: {
+  payable: Array<Arrear & { projectName: string }>;
+  unpaidCount: number;
+  unpaidTotal: number;
+  onPay: (arrear: Arrear & { projectName: string }) => void;
+  onViewAll?: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.55)" }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+        <div className="px-6 py-5 text-center" style={{ background: "linear-gradient(135deg,#9f1239,#e11d48)" }}>
+          <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center" style={{ background: "rgba(255,255,255,0.2)" }}>
+            <AlertTriangle size={24} color="#fff" />
+          </div>
+          <h2 className="text-lg font-extrabold text-white">Clear your arrears first</h2>
+          <p className="text-xs mt-1" style={{ color: "rgba(255,255,255,0.8)" }}>
+            {unpaidCount} unpaid month{unpaidCount !== 1 ? "s" : ""} · {fmtKESFull(unpaidTotal)} outstanding
+          </p>
+        </div>
+        <div className="p-5 space-y-2.5">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Choose what to pay</p>
+          {payable.map((a) => (
+            <button key={`${a.plotId}-${a.period}`} onClick={() => onPay(a)}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 text-left hover:shadow-md transition-all"
+              style={{ borderColor: "#e11d48", background: "#fff1f2" }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "#fecdd3" }}>
+                <MapPin size={18} color="#be123c" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-sm text-slate-900">Arrears · {a.monthLabel}</p>
+                <p className="text-[11px] text-slate-500 truncate">Plot {a.plotNumber}{a.projectName && a.projectName !== "—" ? ` · ${a.projectName}` : ""}</p>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-sm font-extrabold" style={{ color: "#be123c" }}>{fmtKESFull(a.remaining)}</p>
+                <p className="text-[10px] font-bold text-emerald-600">Pay →</p>
+              </div>
+            </button>
+          ))}
+          <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 opacity-70" style={{ borderColor: "#e5e7eb", background: "#f9fafb" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "#f3f4f6" }}>
+              <Lock size={16} color="#9ca3af" />
+            </div>
+            <div className="flex-1">
+              <p className="font-bold text-sm text-slate-400">Regular plot payment</p>
+              <p className="text-[11px] text-slate-400">Locked until all arrears are cleared</p>
+            </div>
+          </div>
+          {onViewAll && (
+            <button onClick={onViewAll} className="w-full py-2 text-xs font-semibold text-rose-700 hover:underline">View all arrears</button>
+          )}
+          <button onClick={onClose}
+            className="w-full py-3 rounded-xl border text-sm font-semibold text-gray-500 hover:bg-gray-50"
+            style={{ borderColor: "var(--border)" }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Member arrears (shared by the Arrears page and My Plots) ────────────────
+
+function useMemberArrears() {
+  const profile = useProfile();
+  const memberId = profile?.member_id ?? null;
+  const memberType = profile?.role === "shareholder" || profile?.role === "client" ? profile.role : null;
+  const [arrears, setArrears] = useState<Array<Arrear & { projectName: string; plot: any }>>([]);
+  const [member, setMember] = useState<{ name: string; phone?: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    if (!memberId || !memberType) { setArrears([]); setLoading(false); return; }
+    setLoading(true);
+    try {
+      const [{ data: plots }, { data: m }] = await Promise.all([
+        supabase.from("plots")
+          .select("id,plot_number,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status,project:projects(project_name)")
+          .eq("assigned_to_id", memberId).eq("assigned_to_type", memberType),
+        supabase.from(`${memberType}s`).select("name,phone").eq("id", memberId).maybeSingle(),
+      ]);
+      setMember(m ? { name: (m as any).name, phone: (m as any).phone ?? undefined } : null);
+      const plotIds = (plots ?? []).map((pl: any) => Number(pl.id));
+      const { data: pmts } = plotIds.length
+        ? await supabase.from("plot_payments").select("plot_id,amount,payment_date,created_at").in("plot_id", plotIds)
+        : { data: [] as any[] };
+      const list = (plots ?? []).flatMap((pl: any) =>
+        computePlotArrears(pl, pmts ?? []).map((a) => ({ ...a, projectName: pl.project?.project_name ?? "—", plot: pl })),
+      ).sort((a, b) => a.period.localeCompare(b.period) || a.plotNumber.localeCompare(b.plotNumber));
+      setArrears(list);
+    } catch {
+      setArrears([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [memberId, memberType]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const unpaid = arrears.filter((a) => a.status === "unpaid");
+  // Only the oldest unpaid month of each plot is payable (payments clear the oldest month first).
+  const payableKeys = new Set<string>();
+  const seen = new Set<number>();
+  for (const a of unpaid) {
+    if (seen.has(a.plotId)) continue;
+    seen.add(a.plotId);
+    payableKeys.add(`${a.plotId}-${a.period}`);
+  }
+  const requestFor = (a: Arrear & { projectName: string; plot: any }): ArrearPayRequest | null => {
+    if (!memberId || !memberType) return null;
+    return {
+      plot: { id: a.plotId, plot_number: a.plotNumber, price: Number(a.plot.price ?? 0), paid_amount: Number(a.plot.paid_amount ?? 0), projectName: a.projectName === "—" ? "" : a.projectName },
+      member: { id: memberId, name: member?.name ?? "", phone: member?.phone, type: memberType },
+      amount: a.remaining,
+      monthLabel: a.monthLabel,
+    };
+  };
+  const payable = unpaid.filter((a) => payableKeys.has(`${a.plotId}-${a.period}`));
+  return { arrears, unpaid, payable, unpaidTotal: unpaidArrearsTotal(arrears), payableKeys, member, memberId, memberType, loading, reload, requestFor };
+}
+
+function MyArrearsPage() {
+  const { arrears, unpaid, unpaidTotal, payableKeys, loading, reload, requestFor, member } = useMemberArrears();
+  const [payRequest, setPayRequest] = useState<ArrearPayRequest | null>(null);
+  // Notify is an admin action: only shown when an admin views this page via Login As.
+  const { impersonating, realProfile } = useImpersonation();
+  const canNotify = !!impersonating && realProfile?.role === "admin";
+  const [notifyState, setNotifyState] = useState<Record<string, { status: "sending" | "sent" | "error"; message?: string }>>({});
+  const notify = async (a: Arrear) => {
+    const key = `${a.plotId}-${a.period}`;
+    if (!member?.phone) { setNotifyState((s) => ({ ...s, [key]: { status: "error", message: "No phone number" } })); return; }
+    setNotifyState((s) => ({ ...s, [key]: { status: "sending" } }));
+    try {
+      await sendSms(member.phone, smsTemplates.arrearsNotice(member.name || "Member", fmtKESFull(a.amount), fmtDate(a.dueDate), fmtKESFull(a.remaining), a.plotNumber), SMS_TRIGGERS.arrearsNotice);
+      logActivity({ category: "plot", action: "notify", description: `Arrears notice (${a.monthLabel}, plot ${a.plotNumber}) sent to ${member.name || "member"}`, meta: { plot_id: a.plotId, period: a.period, amount: a.remaining } });
+      setNotifyState((s) => ({ ...s, [key]: { status: "sent" } }));
+    } catch (e: any) {
+      setNotifyState((s) => ({ ...s, [key]: { status: "error", message: e?.message ?? "SMS failed" } }));
+    }
+  };
+
+  const pay = (a: Arrear & { projectName: string; plot: any }) => setPayRequest(requestFor(a));
+
+  if (loading) return <div className="flex items-center justify-center h-40"><Loader2 size={24} className="animate-spin" style={{ color: "#e11d48" }} /></div>;
+
+  return (
+    <div className="p-4 md:p-6 space-y-4 max-w-4xl">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-bold text-xl" style={{ color: "#1a202c" }}>Arrears</h1>
+          <p className="text-sm text-gray-400">Monthly plot repayments not paid on or before the deadline</p>
+        </div>
+        <div className="rounded-xl px-4 py-2.5 text-right" style={{ background: unpaid.length ? "#fff1f2" : "#ecfdf5" }}>
+          <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: unpaid.length ? "#be123c" : "#047857" }}>Total Unpaid</p>
+          <p className="text-lg font-extrabold" style={{ color: unpaid.length ? "#be123c" : "#047857" }}>{unpaid.length ? fmtKESFull(unpaidTotal) : "Cleared"}</p>
+        </div>
+      </div>
+
+      {unpaid.length > 0 && (
+        <div className="rounded-xl px-3 py-2.5 text-xs font-semibold" style={{ background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }}>
+          Clear your arrears to make other plot payments. Pay the oldest month first.
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: "var(--border)" }}>
+        {arrears.length === 0 ? (
+          <div className="py-14 text-center">
+            <CheckCircle size={28} className="mx-auto mb-2 text-emerald-400" />
+            <p className="text-sm text-slate-500">No arrears. All your repayments were made on time.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[640px]">
+              <thead style={{ background: "#1e3a5f" }}>
+                <tr>{["Month", "Project", "Plot Number", "Monthly Repayment", "Paid Status", "Action"].map((h) => (
+                  <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-white">{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {arrears.map((a, i) => (
+                  <tr key={`${a.plotId}-${a.period}`} className="border-t" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                    <td className="px-3 py-2.5">
+                      <p className="font-semibold text-slate-800">{a.monthLabel}</p>
+                      <p className="text-[10px] text-slate-400">Due {fmtDate(a.dueDate)}</p>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-600">{a.projectName}</td>
+                    <td className="px-3 py-2.5 font-bold text-blue-700">{a.plotNumber}</td>
+                    <td className="px-3 py-2.5">
+                      <p className="font-bold text-slate-800">{fmtKESFull(a.amount)}</p>
+                      {a.status === "unpaid" && a.paid > 0 && <p className="text-[10px] text-rose-600">{fmtKESFull(a.remaining)} left</p>}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${a.status === "paid" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                        {a.status === "paid" ? "Paid" : "Not paid"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-1.5">
+                      {a.status === "paid"
+                        ? <span className="text-[10px] text-slate-400">{a.clearedOn ? `Paid ${fmtDate(a.clearedOn)}` : "—"}</span>
+                        : payableKeys.has(`${a.plotId}-${a.period}`)
+                          ? <button onClick={() => pay(a)} className="rounded-lg px-4 py-1.5 text-[11px] font-bold text-white hover:opacity-90" style={{ background: "#16a34a" }}>Pay</button>
+                          : <span className="text-[10px] text-slate-400">Pay earlier month first</span>}
+                      {canNotify && a.status === "unpaid" && (() => {
+                        const n = notifyState[`${a.plotId}-${a.period}`];
+                        return (
+                          <button onClick={() => notify(a)} disabled={n?.status === "sending"}
+                            title={n?.status === "error" ? n.message : "Send an arrears reminder SMS to this member"}
+                            className="rounded-lg border px-3 py-1.5 text-[11px] font-bold disabled:opacity-60"
+                            style={n?.status === "sent"
+                              ? { borderColor: "#86efac", background: "#f0fdf4", color: "#15803d" }
+                              : n?.status === "error"
+                                ? { borderColor: "#fecaca", background: "#fef2f2", color: "#b91c1c" }
+                                : { borderColor: "#fcd34d", background: "#fffbeb", color: "#b45309" }}>
+                            {n?.status === "sending" ? "Sending…" : n?.status === "sent" ? "Notified ✓" : n?.status === "error" ? "Retry" : "Notify"}
+                          </button>
+                        );
+                      })()}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              {unpaid.length > 0 && (
+                <tfoot>
+                  <tr className="border-t-2" style={{ background: "#fff1f2", borderColor: "#fecdd3" }}>
+                    <td colSpan={3} className="px-3 py-2.5 text-xs font-extrabold uppercase" style={{ color: "#9f1239" }}>Total Unpaid</td>
+                    <td className="px-3 py-2.5 text-xs font-extrabold" style={{ color: "#be123c" }}>{fmtKESFull(unpaidTotal)}</td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        )}
+      </div>
+
+      {payRequest && (
+        <ArrearPayModal request={payRequest} onClose={() => setPayRequest(null)} onPaid={() => { setPayRequest(null); reload(); }} />
+      )}
+    </div>
+  );
+}
+
 function MyPlotsPage() {
   const profile = useProfile()!;
+  const navigate = useNavigate();
+  // Regular plot payments are blocked until arrears are cleared.
+  const {
+    unpaid: unpaidArrearsList, payable: payableArrears, unpaidTotal: unpaidArrearsSum,
+    reload: reloadArrears, requestFor: arrearRequestFor,
+  } = useMemberArrears();
+  const [showArrearsChooser, setShowArrearsChooser] = useState(false);
+  const [arrearPayRequest, setArrearPayRequest] = useState<ArrearPayRequest | null>(null);
   const [plots, setPlots]             = useState<any[]>([]);
   const [loading, setLoading]         = useState(true);
   const [payPlot, setPayPlot]         = useState<any | null>(null);
@@ -5141,17 +5565,41 @@ function MyPlotsPage() {
 
             {/* ── Make Payment button ── */}
             <div className="border-t" style={{ borderColor: "var(--border)" }}>
-              <button onClick={() => setPayPlot(p)}
-                className="flex w-full items-center justify-center gap-2 py-3 text-sm font-semibold hover:bg-green-50 transition-colors"
-                style={{ color: "#16a34a" }}>
-                <CreditCard size={15} />
-                Make Payment
-              </button>
+              {unpaidArrearsList.length > 0 ? (
+                <button onClick={() => setShowArrearsChooser(true)}
+                  className="flex w-full items-center justify-center gap-2 py-3 text-sm font-semibold hover:bg-rose-50 transition-colors"
+                  style={{ color: "#be123c" }}>
+                  <CreditCard size={15} />
+                  Make Payment · arrears first ({fmtKESFull(unpaidArrearsSum)})
+                </button>
+              ) : (
+                <button onClick={() => setPayPlot(p)}
+                  className="flex w-full items-center justify-center gap-2 py-3 text-sm font-semibold hover:bg-green-50 transition-colors"
+                  style={{ color: "#16a34a" }}>
+                  <CreditCard size={15} />
+                  Make Payment
+                </button>
+              )}
             </div>
           </div>
         );
       })}
     </div>
+
+    {showArrearsChooser && (
+      <PayArrearsChooser
+        payable={payableArrears}
+        unpaidCount={unpaidArrearsList.length}
+        unpaidTotal={unpaidArrearsSum}
+        onPay={(a) => { setShowArrearsChooser(false); setArrearPayRequest(arrearRequestFor(a as any)); }}
+        onViewAll={() => { setShowArrearsChooser(false); navigate("/arrears"); }}
+        onClose={() => setShowArrearsChooser(false)}
+      />
+    )}
+    {arrearPayRequest && (
+      <ArrearPayModal request={arrearPayRequest} onClose={() => setArrearPayRequest(null)}
+        onPaid={() => { setArrearPayRequest(null); reloadArrears(); loadPlots(); }} />
+    )}
 
     {payPlot && (
       <PlotPaymentModal
@@ -6419,6 +6867,60 @@ const METHOD_META: Record<PayMethod, { label: string; icon: string; color: strin
   cheque:     { label: "Cheque",     icon: "📝", color: "#7c3aed", bg: "#f5f3ff" },
   commission: { label: "Commission", icon: "🤝", color: "#b45309", bg: "#fef3c7" },
 };
+
+// ─── Arrear payment (admin Debtors report) ───────────────────────────────────
+// Opens the standard payment modal (M-Pesa STK push to the member's phone, or a
+// manual method) for one arrear, then records it as a normal plot payment.
+function ArrearPayModal({ request, onClose, onPaid }: { request: ArrearPayRequest; onClose: () => void; onPaid: () => void }) {
+  const { plot, member, monthLabel } = request;
+  const amount = Math.min(request.amount, Math.max(0, plot.price - plot.paid_amount));
+
+  const handleComplete = async (method: PayMethod, ref?: string, _viaStk?: boolean, phone?: string, extras?: PaymentExtras) => {
+    if (amount <= 0) { onClose(); return; }
+    const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
+    const payerName = extras?.paidBy || member.name;
+    const payerPhone = phone ?? member.phone ?? "";
+    const structuredNotes = JSON.stringify({
+      method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : method === "commission" ? "Commission" : "Cash",
+      ref: ref ?? "",
+      paidBy: payerName,
+      phone: payerPhone,
+      fine: "",
+      status: "",
+      note: extras?.comment ? `Arrears ${monthLabel} · ${extras.comment}` : `Arrears ${monthLabel}`,
+    });
+    await plotsApi.recordPayment(plot.id, amount, structuredNotes, today);
+    if (payerPhone) {
+      sendSms(payerPhone, smsTemplates.plotReceipt(payerName.split(" ")[0] || payerName, `KES ${amount.toLocaleString()}`, plot.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+    }
+    logActivity({ category: "plot", action: "payment", description: `Arrears (${monthLabel}) on plot ${plot.plot_number} of KES ${amount.toLocaleString()} recorded for ${payerName}`, meta: { plot_id: plot.id, amount, method } });
+    if (method === "mpesa") {
+      const baseComment = `PHONE:${payerPhone}|ACCOUNT:${plot.plot_number}`;
+      await paymentsApi.create({
+        payment_id: ref ?? undefined,
+        date_paid: today,
+        amount,
+        paid_by: payerName,
+        purpose: "Plot Payment",
+        mode: "Mpesa",
+        comment: `${baseComment} · Arrears ${monthLabel}${extras?.comment ? ` · ${extras.comment}` : ""}`,
+      });
+    }
+    onPaid();
+  };
+
+  return (
+    <PaymentModal
+      amount={amount}
+      description={`Arrears ${monthLabel} · Plot ${plot.plot_number}`}
+      memberName={member.name}
+      memberPhone={member.phone}
+      accountRef={(plot.projectName ? `${plot.projectName}/Plot ${plot.plot_number}` : `Plot ${plot.plot_number}`).slice(0, 12)}
+      onClose={onClose}
+      onComplete={handleComplete}
+    />
+  );
+}
 
 function PaymentModal({ amount, description, memberName, memberPhone, accountRef, onComplete, onClose }: PaymentModalProps) {
   const profile = useProfile();
@@ -7925,7 +8427,7 @@ const moduleLabels: Record<Module, string> = {
   dashboard: "Dashboard", shareholders: "Shareholders", clients: "Clients",
   contributions: "Contributions", projects: "Projects", investors: "Ext. Investors",
   payments: "Payments", refunds: "Refunds", reports: "Reports",
-  settings: "Settings", "my-plots": "My Plots", help: "Help & Support",
+  settings: "Settings", "my-plots": "My Plots", arrears: "Arrears", help: "Help & Support",
   leads: "Leads", "mpesa-transactions": "M-Pesa Transactions",
 };
 
@@ -7941,6 +8443,7 @@ const moduleIconMap: Record<Module, { icon: React.ReactNode; bg: string; color: 
   reports:       { icon: <BarChart2 size={36} />,        bg: "#eff6ff", color: "#3b82f6" },
   settings:      { icon: <SlidersHorizontal size={36} />,bg: "#f8fafc", color: "#64748b" },
   "my-plots":          { icon: <MapPin size={36} />,           bg: "#ecfdf5", color: "#059669" },
+  arrears:             { icon: <AlertTriangle size={36} />,    bg: "#fff1f2", color: "#e11d48" },
   help:                { icon: <HelpCircle size={36} />,       bg: "#f5f3ff", color: "#8b5cf6" },
   leads:               { icon: <TrendingUp size={36} />,       bg: "#f5f3ff", color: "#7c3aed" },
   "mpesa-transactions":{ icon: <RefreshCw size={36} />,        bg: "#f0f9ff", color: "#0ea5e9" },
@@ -7964,7 +8467,7 @@ function useVisibleNav(): NavItem[] {
   const role = profile?.role ?? "admin";
   const hiddenModules = useHiddenModules(role);
   if (!profile || role === "admin") {
-    return navItems.filter((n) => !hiddenModules.includes(n.id) && n.id !== "my-plots" && n.id !== "help");
+    return navItems.filter((n) => !hiddenModules.includes(n.id) && n.id !== "my-plots" && n.id !== "arrears" && n.id !== "help");
   }
   // Use per-user allowed_modules if set (reception with custom access), else fall back to role default
   const allowed = (
@@ -8241,6 +8744,8 @@ function AppShell() {
             </div>
           ) : active === "my-plots" ? (
             <div key={pageKey} className="h-full overflow-auto pb-20 md:pb-0"><MyPlotsPage /></div>
+          ) : active === "arrears" ? (
+            <div key={pageKey} className="h-full overflow-auto pb-20 md:pb-0"><MyArrearsPage /></div>
           ) : active === "help" ? (
             <div key={pageKey} className="h-full overflow-auto pb-20 md:pb-0"><HelpPage /></div>
           ) : active === "shareholders" ? (
@@ -8256,7 +8761,7 @@ function AppShell() {
           ) : active === "leads" ? (
             <div key={pageKey} className="h-full overflow-hidden"><LeadsPage /></div>
           ) : active === "reports" ? (
-            <ReportsPage key={pageKey} />
+            <ReportsPage key={pageKey} ArrearPay={ArrearPayModal} />
           ) : active === "payments" ? (
             <PaymentsPage key={pageKey} />
           ) : active === "mpesa-transactions" ? (
