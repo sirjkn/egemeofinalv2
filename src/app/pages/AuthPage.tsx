@@ -6,6 +6,21 @@ import {
 } from "lucide-react";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
 import { sendSms, loadSmsSettingsFromSupabase } from "@/lib/sms";
+import { projectId, publicAnonKey } from "../../../utils/supabase/info";
+
+// Password reset is authorised by the admin-reset-password edge function.
+const RESET_FN_URL = `https://${projectId}.supabase.co/functions/v1/admin-reset-password`;
+async function callResetFn(body: Record<string, unknown>): Promise<{ ok: boolean; data: any }> {
+  const res = await fetch(RESET_FN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: publicAnonKey, Authorization: `Bearer ${publicAnonKey}` },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && data?.success !== false, data };
+}
+// Message returned by the previous version of the function (no server-side codes yet).
+const LEGACY_RESET_FN = "userId and newPassword are required";
 import { isBiometricSupported, isBiometricEnabledOnDevice, loginWithBiometrics, forgetBiometricOnDevice } from "@/lib/passkey";
 
 export interface UserProfile {
@@ -830,10 +845,25 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
 
   const firstName = step.name.split(" ")[0] || "there";
   const displayPhone = step.email.replace(/@.*$/, ""); // strip @sacco.co.ke
+  // "server": code generated/checked by the edge function (secure).
+  // "legacy": fallback while the old edge function is still deployed.
+  const [otpMode, setOtpMode] = useState<"server" | "legacy">("server");
+  const [sentTo, setSentTo] = useState("");
 
   const handleSendOtp = async () => {
     setLoading(true); setErr("");
     try {
+      const r = await callResetFn({ action: "send-otp", email: step.email });
+      if (r.ok) {
+        setOtpMode("server");
+        setSentTo(r.data?.sentTo ?? "");
+        setPhase("verify");
+        return;
+      }
+      if (r.data?.error !== LEGACY_RESET_FN) throw new Error(r.data?.error || "Could not send the reset code.");
+      setOtpMode("legacy");
+
+      // ── Legacy fallback (old edge function still deployed) ──
       // Ensure SMS credentials are loaded from DB (covers devices that never visited Settings)
       await loadSmsSettingsFromSupabase().catch(() => {});
 
@@ -863,6 +893,16 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
     if (newPw !== confirmPw) { setErr("Passwords do not match"); return; }
     setLoading(true); setErr("");
     try {
+      if (otpMode === "server") {
+        const r = await callResetFn({ action: "reset-with-otp", email: step.email, code: otp.trim(), newPassword: newPw });
+        if (!r.ok) throw new Error(r.data?.error || "Reset failed");
+        setSuccess(true);
+        await new Promise((res) => setTimeout(res, 1800));
+        onDone();
+        return;
+      }
+
+      // ── Legacy fallback ──
       // 1. Verify OTP from sessionStorage
       const storedRaw = sessionStorage.getItem(`otp_reset_${step.email}`);
       if (!storedRaw) throw new Error("Code expired. Please request a new one.");
@@ -928,8 +968,8 @@ function ResetOtpStep({ step, onBack, onDone, company }: {
         <p className="text-sm text-gray-400 mb-1">{firstName}</p>
         <p className="text-xs text-gray-400 mb-7">
           {phase === "send"
-            ? `We'll send a 6-digit code to your registered phone (${displayPhone}).`
-            : "Enter the code you received and choose a new password."}
+            ? `We'll send a 6-digit code to your registered phone${/^[0+]?\d{9,15}$/.test(displayPhone) ? ` (${displayPhone})` : ""}.`
+            : `Enter the code${sentTo ? ` sent to ${sentTo}` : " you received"} and choose a new password.`}
         </p>
 
         {phase === "send" ? (
