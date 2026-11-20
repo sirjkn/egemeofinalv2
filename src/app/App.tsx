@@ -1875,7 +1875,7 @@ function ShareholdersPage() {
   const [members, setMembers] = useState<Shareholder[]>([]);
   const [selected, setSelected] = useState<Shareholder | null>(null);
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromUrl);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<Shareholder | null>(null);
@@ -2276,7 +2276,7 @@ function ClientsPage() {
   const [members, setMembers] = useState<Client[]>([]);
   const [selected, setSelected] = useState<Client | null>(null);
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromUrl);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<Client | null>(null);
@@ -2501,7 +2501,7 @@ function InvestorsPage() {
   const [members, setMembers] = useState<Investor[]>([]);
   const [selected, setSelected] = useState<Investor | null>(null);
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromUrl);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<Investor | null>(null);
@@ -6481,7 +6481,7 @@ function PaymentsPage() {
   const [projectF, setProjectF] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromUrl);
   const [projects, setProjects] = useState<{ id: number; project_name: string }[]>([]);
 
   useEffect(() => {
@@ -6661,7 +6661,11 @@ function PaymentsPage() {
                 return (
                   <tr key={p.id} className="border-t hover:bg-gray-50 transition-colors"
                     style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
-                    <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">{fmtDateTime((p as any).created_at || p.date_paid)}</td>
+                    {/* Date paid is what the payment is filtered/sorted by; the entry time is secondary. */}
+                    <td className="px-3 py-2 text-xs whitespace-nowrap">
+                      <span className="font-semibold text-gray-700">{fmtDate(p.date_paid)}</span>
+                      {(p as any).created_at && <span className="block text-[10px] text-gray-400">Recorded {fmtDateTime((p as any).created_at)}</span>}
+                    </td>
                     <td className="px-3 py-2 font-bold whitespace-nowrap" style={{ color: "#14b8a6" }}>{fmtKESFull(Number(p.amount))}</td>
                     <td className="px-3 py-2">
                       <div className="font-semibold text-xs" style={{ color: "#1a202c" }}>{p.paid_by}</div>
@@ -8669,6 +8673,181 @@ function BottomNav() {
 
 // ─── App Shell ────────────────────────────────────────────────────────────────
 
+// ─── Universal search (top bar, staff only) ──────────────────────────────────
+// Searches members, clients, investors, payments (incl. M-Pesa transaction
+// codes), plot payments, plots, projects and leads. Clicking a result opens the
+// matching page pre-filtered via ?q=<term>.
+
+/** Initial value for a page's search box, taken from ?q= in the URL. */
+function initialSearchFromUrl(): string {
+  try { return new URLSearchParams(window.location.search).get("q") ?? ""; } catch { return ""; }
+}
+
+type GlobalHit = { key: string; group: string; title: string; sub: string; module: Module; q: string };
+
+const GLOBAL_GROUPS: Record<string, { icon: React.ReactNode; color: string }> = {
+  Shareholders:    { icon: <Users size={13} />,            color: "#6366f1" },
+  Clients:         { icon: <UserCircle2 size={13} />,      color: "#a855f7" },
+  Investors:       { icon: <CircleDollarSign size={13} />, color: "#ca8a04" },
+  Payments:        { icon: <CreditCard size={13} />,       color: "#0d9488" },
+  "Plot payments": { icon: <MapPin size={13} />,           color: "#059669" },
+  Plots:           { icon: <MapPin size={13} />,           color: "#16a34a" },
+  Projects:        { icon: <FolderOpen size={13} />,       color: "#22c55e" },
+  Leads:           { icon: <TrendingUp size={13} />,       color: "#7c3aed" },
+};
+
+async function runGlobalSearch(raw: string): Promise<GlobalHit[]> {
+  // PostgREST or() filters can't contain these characters.
+  const q = raw.replace(/[(),*%\\]/g, " ").replace(/\s+/g, " ").trim();
+  if (q.length < 2) return [];
+  const like = `%${q}%`;
+  const num = q.replace(/^(ew|ec)\s*#?\s*/i, "");
+  const isNum = /^\d+$/.test(num);
+  const memberOr = (extra = "") =>
+    [`name.ilike.${like}`, `phone.ilike.${like}`, isNum ? `member_number.eq.${num}` : "", extra].filter(Boolean).join(",");
+  const safe = async <T,>(p: PromiseLike<{ data: T[] | null; error: any }>): Promise<T[]> => {
+    try { const { data, error } = await p; return error ? [] : (data ?? []); } catch { return []; }
+  };
+  const L = 6;
+  const [sh, cl, inv, pay, ppay, plots, projects, leads] = await Promise.all([
+    safe<any>(supabase.from("shareholders").select("id,name,member_number,phone,status").or(memberOr(`email.ilike.${like}`)).limit(L)),
+    safe<any>(supabase.from("clients").select("id,name,member_number,phone,status").or(memberOr(`email.ilike.${like}`)).limit(L)),
+    safe<any>(supabase.from("investors").select("id,name,member_number,phone").or(memberOr()).limit(L)),
+    safe<any>(supabase.from("payments").select("id,payment_id,amount,paid_by,purpose,date_paid,mode")
+      .or(`payment_id.ilike.${like},paid_by.ilike.${like},comment.ilike.${like},purpose.ilike.${like}`).order("date_paid", { ascending: false }).limit(L)),
+    safe<any>(supabase.from("plot_payments").select("id,plot_id,amount,payment_date,notes,plot:plots(plot_number)")
+      .ilike("notes", like).order("payment_date", { ascending: false }).limit(L)),
+    safe<any>(supabase.from("plots").select("id,plot_number,status,price,project:projects(project_name)").ilike("plot_number", like).limit(L)),
+    safe<any>(supabase.from("projects").select("id,project_name,location").or(`project_name.ilike.${like},location.ilike.${like}`).limit(L)),
+    safe<any>(supabase.from("lead_contacts").select("id,first_name,last_name,phone,status")
+      .or(`first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like}`).limit(L)),
+  ]);
+  const hits: GlobalHit[] = [];
+  sh.forEach((r) => hits.push({ key: `sh${r.id}`, group: "Shareholders", title: r.name, sub: `EW#${r.member_number ?? "—"} · ${r.phone ?? ""}${r.status && r.status !== "Active" ? ` · ${r.status}` : ""}`, module: "shareholders", q: r.name }));
+  cl.forEach((r) => hits.push({ key: `cl${r.id}`, group: "Clients", title: r.name, sub: `No. ${r.member_number ?? "—"} · ${r.phone ?? ""}`, module: "clients", q: r.name }));
+  inv.forEach((r) => hits.push({ key: `in${r.id}`, group: "Investors", title: r.name, sub: `No. ${r.member_number ?? "—"} · ${r.phone ?? ""}`, module: "investors", q: r.name }));
+  pay.forEach((r) => hits.push({ key: `pa${r.id}`, group: "Payments", title: `${r.payment_id || "Payment"} · ${fmtKESFull(Number(r.amount))}`, sub: `${r.paid_by ?? ""} · ${r.purpose ?? ""} · ${r.date_paid ? fmtDate(r.date_paid) : ""}`, module: "payments", q: r.payment_id || r.paid_by || q }));
+  ppay.forEach((r) => {
+    let ref = "", by = "";
+    try { const n = JSON.parse(r.notes ?? "{}"); ref = n.ref ?? ""; by = n.paidBy ?? ""; } catch { /* plain-text notes */ }
+    hits.push({ key: `pp${r.id}`, group: "Plot payments", title: `${ref || "Plot payment"} · ${fmtKESFull(Number(r.amount))}`, sub: `Plot ${r.plot?.plot_number ?? r.plot_id}${by ? ` · ${by}` : ""} · ${r.payment_date ? fmtDate(r.payment_date) : ""}`, module: "projects", q: r.plot?.plot_number ?? q });
+  });
+  plots.forEach((r) => hits.push({ key: `pl${r.id}`, group: "Plots", title: `Plot ${r.plot_number}`, sub: `${r.project?.project_name ?? ""} · ${r.status ?? ""}`, module: "projects", q: r.project?.project_name ?? q }));
+  projects.forEach((r) => hits.push({ key: `pr${r.id}`, group: "Projects", title: r.project_name, sub: r.location ?? "", module: "projects", q: r.project_name }));
+  leads.forEach((r) => hits.push({ key: `ld${r.id}`, group: "Leads", title: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "Lead", sub: `${r.phone ?? ""}${r.status ? ` · ${r.status}` : ""}`, module: "leads", q: r.phone || r.first_name || q }));
+  return hits;
+}
+
+function GlobalSearch() {
+  const navigate = useNavigate();
+  const { bumpPageKey } = useContext(PageKeyCtx);
+  const [term, setTerm] = useState("");
+  const [hits, setHits] = useState<GlobalHit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const seq = useRef(0);
+
+  // Debounced search; ignore stale responses.
+  useEffect(() => {
+    const t = term.trim();
+    if (t.length < 2) { setHits([]); setLoading(false); return; }
+    setLoading(true);
+    const id = ++seq.current;
+    const timer = setTimeout(async () => {
+      const res = await runGlobalSearch(t);
+      if (id === seq.current) { setHits(res); setActive(0); setLoading(false); }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [term]);
+
+  // Close when clicking outside; Ctrl/Cmd+K focuses the box.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (boxRef.current && !boxRef.current.contains(e.target as Node)) { setOpen(false); setMobileOpen(false); } };
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setMobileOpen(true); setOpen(true); setTimeout(() => inputRef.current?.focus(), 0); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, []);
+
+  const go = (h: GlobalHit) => {
+    setOpen(false); setMobileOpen(false); setTerm("");
+    navigate(`/${h.module}?q=${encodeURIComponent(h.q)}`);
+    bumpPageKey();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") { setOpen(false); setMobileOpen(false); inputRef.current?.blur(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, hits.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter" && hits[active]) { e.preventDefault(); go(hits[active]); }
+  };
+
+  const groups = Array.from(new Set(hits.map((h) => h.group)));
+  const showPanel = open && term.trim().length >= 2;
+
+  return (
+    <div ref={boxRef} className="relative flex-1 min-w-0 flex justify-end md:justify-center">
+      {/* Phone: icon button that expands the box over the header */}
+      <button type="button" onClick={() => { setMobileOpen(true); setOpen(true); setTimeout(() => inputRef.current?.focus(), 0); }}
+        className={`md:hidden w-9 h-9 rounded-lg flex items-center justify-center border ${mobileOpen ? "hidden" : ""}`}
+        style={{ borderColor: "var(--border)", color: "#475569" }} aria-label="Search">
+        <Search size={16} />
+      </button>
+      <div className={`${mobileOpen ? "fixed left-2 right-2 top-2 z-[60]" : "hidden"} md:static md:block md:w-full md:max-w-md`}>
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input ref={inputRef} value={term}
+            onChange={(e) => { setTerm(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)} onKeyDown={onKeyDown}
+            placeholder="Search members, clients, payments, M-Pesa code, plots, projects…"
+            className="w-full pl-9 pr-16 py-2 border rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 shadow-sm md:shadow-none"
+            style={{ borderColor: "var(--border)" }} />
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            {loading && <Loader2 size={13} className="animate-spin text-gray-400" />}
+            {(term || mobileOpen) && (
+              <button type="button" onClick={() => { setTerm(""); setHits([]); if (!term) { setMobileOpen(false); setOpen(false); } inputRef.current?.focus(); }}
+                className="p-1 rounded text-gray-400 hover:text-gray-600" aria-label="Clear search"><X size={13} /></button>
+            )}
+            {!term && !mobileOpen && <kbd className="hidden lg:inline text-[9px] text-gray-400 border rounded px-1" style={{ borderColor: "var(--border)" }}>Ctrl K</kbd>}
+          </span>
+        </div>
+
+        {showPanel && (
+          <div className="absolute left-0 right-0 mt-1.5 bg-white rounded-xl border shadow-2xl max-h-[70vh] overflow-y-auto z-[60]" style={{ borderColor: "var(--border)" }}>
+            {loading && hits.length === 0 ? (
+              <div className="px-4 py-6 text-center text-xs text-gray-400">Searching…</div>
+            ) : hits.length === 0 ? (
+              <div className="px-4 py-6 text-center text-xs text-gray-400">No matches for “{term.trim()}”.</div>
+            ) : groups.map((g) => (
+              <div key={g} className="py-1">
+                <p className="px-3 pt-1.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
+                  <span style={{ color: GLOBAL_GROUPS[g]?.color }}>{GLOBAL_GROUPS[g]?.icon}</span>{g}
+                </p>
+                {hits.filter((h) => h.group === g).map((h) => {
+                  const idx = hits.indexOf(h);
+                  return (
+                    <button key={h.key} type="button" onMouseEnter={() => setActive(idx)} onClick={() => go(h)}
+                      className={`w-full text-left px-3 py-2 flex flex-col ${idx === active ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
+                      <span className="text-xs font-semibold text-slate-800 truncate">{h.title}</span>
+                      {h.sub && <span className="text-[10px] text-slate-400 truncate">{h.sub}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AppShell() {
   const navigate   = useNavigate();
   const location   = useLocation();
@@ -8770,8 +8949,8 @@ function AppShell() {
           {currentNav && (
             <span className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: currentNav.iconBg }}>{currentNav.icon}</span>
           )}
-          <span className="font-semibold text-sm" style={{ color: "#1a202c" }}>{moduleLabels[active] ?? moduleLabels["dashboard"]}</span>
-          <div className="flex-1" />
+          <span className="font-semibold text-sm hidden sm:inline" style={{ color: "#1a202c" }}>{moduleLabels[active] ?? moduleLabels["dashboard"]}</span>
+          {profile?.role === "admin" || profile?.role === "reception" ? <GlobalSearch /> : <div className="flex-1" />}
           {firstName && (
             <span className="text-xs font-semibold hidden sm:block" style={{ color: "#16a34a" }}>{firstName}</span>
           )}

@@ -3922,7 +3922,7 @@ function ProjectsPage({ isAdmin = true, currentMemberId, currentMemberType }: { 
   const [selected, setSelected] = useState<Project | null>(null);
   const [deepLinkPlotId, setDeepLinkPlotId] = useState<number | undefined>(deepLink.plotId);
   const [showCreate, setShowCreate] = useState(false);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => { try { return new URLSearchParams(window.location.search).get("q") ?? ""; } catch { return ""; } });
   const [shareholders, setShareholders] = useState<Shareholder[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [plotCounts, setPlotCounts] = useState<Record<number, { total: number; allocated: number }>>({});
