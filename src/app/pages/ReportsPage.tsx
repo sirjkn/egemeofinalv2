@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router";
 import {
   BarChart2, Link2, CreditCard, RotateCcw, Users, UserCircle2,
   Filter, Search, ChevronRight, ArrowLeft, FileDown, FileSpreadsheet, Loader2, TrendingUp, AlertTriangle, ListOrdered,
@@ -107,6 +108,19 @@ function ReportsPage({ ArrearPay }: { ArrearPay?: ArrearPayComponent } = {}) {
 
 function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: () => void; ArrearPay?: ArrearPayComponent }) {
   const meta = REPORT_META[type];
+  const navigate = useNavigate();
+  // Arrears links: member → their Shareholders/Clients page (filtered),
+  // project → opens the project, plot → opens the project and highlights the plot.
+  const openMember = (row: any) => {
+    if (!row.shareholder?.name) return;
+    navigate(`/${row.memberType === "client" ? "clients" : "shareholders"}?q=${encodeURIComponent(row.shareholder.name)}`);
+  };
+  const openProject = (row: any, withPlot: boolean) => {
+    const projectId = Number(row.plot?.project_id ?? row.project?.id);
+    if (!projectId) return;
+    navigate("/projects", { state: withPlot ? { projectId, plotId: Number(row.plotId) } : { projectId } });
+  };
+  const linkCls = "hover:underline underline-offset-2 text-left";
 
   // ── shared filter state ──────────────────────────────────────────────────
   const [yearF,    setYearF]    = useState<number | "all">(CY);
@@ -152,6 +166,8 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       const [y, m] = today.split("-").map(Number);
       return `${today.slice(0, 7)}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; // end of this month
     }
+    // No dates picked: show arrears plus everyone whose deadline is today.
+    if (!dateFrom && !dateTo) return today;
     return "";
   })();
   const includeUpcoming = !!upcomingEnd;
@@ -898,7 +914,10 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                 {filtered.map((row: any, index: number) => (
                   <tr key={row.key} className="border-t hover:bg-red-50/40" style={{ borderColor: "var(--border)", background: index % 2 === 0 ? "#fff" : "#f8fafc" }}>
                     <td className="px-3 py-2">
-                      <p className="text-xs font-semibold text-slate-800">{row.shareholder?.name ?? "Unknown"}</p>
+                      {row.shareholder?.name
+                        ? <button type="button" onClick={() => openMember(row)} title={`Open ${row.memberType === "client" ? "client" : "shareholder"}`}
+                            className={`text-xs font-semibold text-slate-800 hover:text-indigo-700 ${linkCls}`}>{row.shareholder.name}</button>
+                        : <p className="text-xs font-semibold text-slate-800">Unknown</p>}
                       <p className="text-[10px] text-slate-400">{row.memberType === "client" ? "Client" : "Shareholder"}{row.shareholder?.phone ? ` · ${row.shareholder.phone}` : ""}</p>
                     </td>
                     <td className="px-3 py-2 text-xs font-bold text-indigo-600">{row.memberType === "client" ? row.shareholder?.member_number ?? "—" : `EW#${row.shareholder?.member_number ?? "—"}`}</td>
@@ -906,8 +925,14 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                       <p className="text-xs font-semibold text-slate-700">{row.monthLabel}</p>
                       <p className="text-[10px] text-slate-400">Due {fmtDate(row.dueDate)}</p>
                     </td>
-                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">{row.project?.project_name ?? "—"}</td>
-                    <td className="px-3 py-2 text-xs font-bold text-blue-700">{row.plotNumber}</td>
+                    <td className="px-3 py-2 text-xs font-semibold text-slate-700">
+                      {row.project?.project_name
+                        ? <button type="button" onClick={() => openProject(row, false)} title="Open project" className={`font-semibold text-slate-700 hover:text-indigo-700 ${linkCls}`}>{row.project.project_name}</button>
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs font-bold text-blue-700">
+                      <button type="button" onClick={() => openProject(row, true)} title="Open plot" className={`font-bold text-blue-700 ${linkCls}`}>{row.plotNumber}</button>
+                    </td>
                     <td className="px-3 py-2">
                       <p className="text-xs font-bold text-slate-800">{fmtKESFull(Number(row.amount))}</p>
                       {row.status !== "paid" && Number(row.paid) > 0 && <p className={`text-[10px] ${row.status === "upcoming" ? "text-amber-600" : "text-rose-600"}`}>{fmtKESFull(Number(row.remaining))} left</p>}

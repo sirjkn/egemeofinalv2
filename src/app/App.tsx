@@ -8683,7 +8683,7 @@ function initialSearchFromUrl(): string {
   try { return new URLSearchParams(window.location.search).get("q") ?? ""; } catch { return ""; }
 }
 
-type GlobalHit = { key: string; group: string; title: string; sub: string; module: Module; q: string };
+type GlobalHit = { key: string; group: string; title: string; sub: string; module: Module; q: string; state?: { projectId?: number; plotId?: number } };
 
 const GLOBAL_GROUPS: Record<string, { icon: React.ReactNode; color: string }> = {
   Shareholders:    { icon: <Users size={13} />,            color: "#6366f1" },
@@ -8715,9 +8715,9 @@ async function runGlobalSearch(raw: string): Promise<GlobalHit[]> {
     safe<any>(supabase.from("investors").select("id,name,member_number,phone").or(memberOr()).limit(L)),
     safe<any>(supabase.from("payments").select("id,payment_id,amount,paid_by,purpose,date_paid,mode")
       .or(`payment_id.ilike.${like},paid_by.ilike.${like},comment.ilike.${like},purpose.ilike.${like}`).order("date_paid", { ascending: false }).limit(L)),
-    safe<any>(supabase.from("plot_payments").select("id,plot_id,amount,payment_date,notes,plot:plots(plot_number)")
+    safe<any>(supabase.from("plot_payments").select("id,plot_id,amount,payment_date,notes,plot:plots(plot_number,project_id)")
       .ilike("notes", like).order("payment_date", { ascending: false }).limit(L)),
-    safe<any>(supabase.from("plots").select("id,plot_number,status,price,project:projects(project_name)").ilike("plot_number", like).limit(L)),
+    safe<any>(supabase.from("plots").select("id,plot_number,status,price,project_id,project:projects(project_name)").ilike("plot_number", like).limit(L)),
     safe<any>(supabase.from("projects").select("id,project_name,location").or(`project_name.ilike.${like},location.ilike.${like}`).limit(L)),
     safe<any>(supabase.from("lead_contacts").select("id,first_name,last_name,phone,status")
       .or(`first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like}`).limit(L)),
@@ -8730,10 +8730,10 @@ async function runGlobalSearch(raw: string): Promise<GlobalHit[]> {
   ppay.forEach((r) => {
     let ref = "", by = "";
     try { const n = JSON.parse(r.notes ?? "{}"); ref = n.ref ?? ""; by = n.paidBy ?? ""; } catch { /* plain-text notes */ }
-    hits.push({ key: `pp${r.id}`, group: "Plot payments", title: `${ref || "Plot payment"} · ${fmtKESFull(Number(r.amount))}`, sub: `Plot ${r.plot?.plot_number ?? r.plot_id}${by ? ` · ${by}` : ""} · ${r.payment_date ? fmtDate(r.payment_date) : ""}`, module: "projects", q: r.plot?.plot_number ?? q });
+    hits.push({ key: `pp${r.id}`, group: "Plot payments", title: `${ref || "Plot payment"} · ${fmtKESFull(Number(r.amount))}`, sub: `Plot ${r.plot?.plot_number ?? r.plot_id}${by ? ` · ${by}` : ""} · ${r.payment_date ? fmtDate(r.payment_date) : ""}`, module: "projects", q: "", state: r.plot?.project_id ? { projectId: Number(r.plot.project_id), plotId: Number(r.plot_id) } : undefined });
   });
-  plots.forEach((r) => hits.push({ key: `pl${r.id}`, group: "Plots", title: `Plot ${r.plot_number}`, sub: `${r.project?.project_name ?? ""} · ${r.status ?? ""}`, module: "projects", q: r.project?.project_name ?? q }));
-  projects.forEach((r) => hits.push({ key: `pr${r.id}`, group: "Projects", title: r.project_name, sub: r.location ?? "", module: "projects", q: r.project_name }));
+  plots.forEach((r) => hits.push({ key: `pl${r.id}`, group: "Plots", title: `Plot ${r.plot_number}`, sub: `${r.project?.project_name ?? ""} · ${r.status ?? ""}`, module: "projects", q: "", state: { projectId: Number(r.project_id), plotId: Number(r.id) } }));
+  projects.forEach((r) => hits.push({ key: `pr${r.id}`, group: "Projects", title: r.project_name, sub: r.location ?? "", module: "projects", q: "", state: { projectId: Number(r.id) } }));
   leads.forEach((r) => hits.push({ key: `ld${r.id}`, group: "Leads", title: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "Lead", sub: `${r.phone ?? ""}${r.status ? ` · ${r.status}` : ""}`, module: "leads", q: r.phone || r.first_name || q }));
   return hits;
 }
@@ -8777,7 +8777,7 @@ function GlobalSearch() {
 
   const go = (h: GlobalHit) => {
     setOpen(false); setMobileOpen(false); setTerm("");
-    navigate(`/${h.module}?q=${encodeURIComponent(h.q)}`);
+    navigate(h.q ? `/${h.module}?q=${encodeURIComponent(h.q)}` : `/${h.module}`, h.state ? { state: h.state } : undefined);
     bumpPageKey();
   };
 
