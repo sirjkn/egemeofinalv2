@@ -134,7 +134,9 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   const [plotF, setPlotF] = useState("");
   const [plotOptions, setPlotOptions] = useState<{ id: number; project_id: number; plot_number: string }[]>([]);
   // ── debtors (arrears) filter state — unpaid by default ──────────────────
-  const [arrearStatusF, setArrearStatusF] = useState<"unpaid" | "paid" | "">("unpaid");
+  // unpaid = everything not yet paid (arrears + due today + upcoming)
+  type ArrearStatusFilter = "unpaid" | "arrears" | "due-today" | "upcoming" | "paid" | "";
+  const [arrearStatusF, setArrearStatusF] = useState<ArrearStatusFilter>("unpaid");
   // Picking a To date of today or later also lists repayments due up to that date
   // which are not yet paid (members who have not defaulted yet), marked "Upcoming".
   // Upcoming window ends at the To date, or — when only From is set — at the From date,
@@ -143,7 +145,14 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
     if (type !== "debtors") return "";
     const today = todayEAT();
     const end = dateTo || dateFrom;
-    return end && end >= today ? end : "";
+    if (end && end >= today) return end;
+    // Choosing "Due today" / "Upcoming" works without picking dates.
+    if (arrearStatusF === "due-today") return today;
+    if (arrearStatusF === "upcoming") {
+      const [y, m] = today.split("-").map(Number);
+      return `${today.slice(0, 7)}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; // end of this month
+    }
+    return "";
   })();
   const includeUpcoming = !!upcomingEnd;
   const [payRequest, setPayRequest] = useState<ArrearPayRequest | null>(null);
@@ -266,7 +275,16 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         }
         setRows(arrearRows
           // "Not paid" covers overdue arrears and (when included) upcoming repayments.
-          .filter((row: any) => !arrearStatusF || row.status === arrearStatusF || (arrearStatusF === "unpaid" && row.status === "upcoming"))
+          .filter((row: any) => {
+            switch (arrearStatusF) {
+              case "unpaid":    return row.status === "unpaid" || row.status === "upcoming";
+              case "arrears":   return row.status === "unpaid";
+              case "due-today": return row.status === "upcoming" && row.dueDate === today;
+              case "upcoming":  return row.status === "upcoming" && row.dueDate > today;
+              case "paid":      return row.status === "paid";
+              default:          return true;
+            }
+          })
           .filter((row: any) => (!dateFrom || row.dueDate >= dateFrom) && (!dateTo || row.dueDate <= dateTo) && (!upcomingEnd || row.dueDate <= upcomingEnd)));
 
       } else if (type === "profits") {
@@ -513,7 +531,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
           : shareholders.find((member) => `shareholder:${member.id}` === shareholderF)?.name}`,
         memberTypeF && `Member Type: ${memberTypeF === "client" ? "Client" : "Shareholder"}`,
         plotF && `Plot: ${plotOptions.find((p) => String(p.id) === plotF)?.plot_number ?? plotF}`,
-        type === "debtors" && `Status: ${arrearStatusF === "unpaid" ? "Not paid" : arrearStatusF === "paid" ? "Paid" : "All"}`,
+        type === "debtors" && `Status: ${({ unpaid: "All not paid", arrears: "In arrears", "due-today": "Due today", upcoming: "Upcoming", paid: "Paid", "": "All" } as Record<string, string>)[arrearStatusF]}`,
         type === "debtors" && includeUpcoming && "Including upcoming repayments",
       ].filter(Boolean).join(" · ") || "All records";
 
@@ -795,13 +813,22 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       )}
       {type === "debtors" && (
         <>
-          <select value={arrearStatusF} onChange={(e) => setArrearStatusF(e.target.value as "unpaid" | "paid" | "")}
-            className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white"
-            style={{ borderColor: arrearStatusF === "unpaid" ? "#ef4444" : arrearStatusF === "paid" ? "#16a34a" : "var(--border)", color: arrearStatusF === "unpaid" ? "#dc2626" : arrearStatusF === "paid" ? "#15803d" : undefined }}>
-            <option value="unpaid">Not paid</option>
-            <option value="paid">Paid</option>
-            <option value="">All arrears</option>
-          </select>
+          {(() => {
+            const tone: Record<string, string> = { unpaid: "#dc2626", arrears: "#dc2626", "due-today": "#0369a1", upcoming: "#15803d", paid: "#15803d" };
+            const c = tone[arrearStatusF];
+            return (
+              <select value={arrearStatusF} onChange={(e) => setArrearStatusF(e.target.value as ArrearStatusFilter)}
+                className="border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none bg-white"
+                style={{ borderColor: c ?? "var(--border)", color: c }}>
+                <option value="unpaid">All not paid</option>
+                <option value="arrears">In arrears</option>
+                <option value="due-today">Due today</option>
+                <option value="upcoming">Upcoming</option>
+                <option value="paid">Paid</option>
+                <option value="">All</option>
+              </select>
+            );
+          })()}
           <select value={memberTypeF} onChange={(e) => {
             const next = e.target.value as "" | "shareholder" | "client";
             setMemberTypeF(next);
