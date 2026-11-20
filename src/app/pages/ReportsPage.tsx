@@ -33,6 +33,22 @@ const REPORT_META: Record<ReportSub, { label: string; desc: string; color: strin
   profits:       { label: "Profit Distributions",  desc: "All profit payouts by project and member",     color: "#d97706", bg: "#fffbeb", icon: <TrendingUp size={22} /> },
 };
 
+/**
+ * Paid-status label for an arrears-report row:
+ *   Paid · Deadline Today (due today, not yet paid) · Upcoming · In Arrears · N days
+ */
+function arrearStatusInfo(row: { status: string; dueDate: string }): { label: string; sub: string; badge: string; subColor: string } {
+  const today = todayEAT();
+  const due = `Due ${fmtDate(row.dueDate)}`;
+  if (row.status === "paid") return { label: "Paid", sub: "", badge: "bg-emerald-50 text-emerald-700", subColor: "" };
+  if (row.status === "upcoming" && row.dueDate === today)
+    return { label: "Deadline Today", sub: due, badge: "bg-red-600 text-white", subColor: "text-red-600" };
+  if (row.status === "upcoming") return { label: "Upcoming", sub: due, badge: "bg-amber-50 text-amber-700", subColor: "text-amber-700" };
+  const days = Math.max(1, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.dueDate}T00:00:00Z`)) / 86_400_000));
+  return { label: `In Arrears · ${days} day${days === 1 ? "" : "s"}`, sub: due, badge: "bg-rose-50 text-rose-700", subColor: "text-rose-500" };
+}
+const arrearStatusText = (row: { status: string; dueDate: string }) => arrearStatusInfo(row).label.replace(" · ", " (") + (row.status === "unpaid" ? ")" : "");
+
 /** Arrear row the Debtors report hands to the payment modal. */
 export interface ArrearPayRequest {
   plot: { id: number; plot_number: string; price: number; paid_amount: number; projectName: string };
@@ -501,7 +517,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
             row.shareholder?.phone ?? "—", row.monthLabel, row.project?.project_name ?? "—", row.plotNumber,
             Number(row.amount).toLocaleString("en-KE"), Number(row.remaining).toLocaleString("en-KE"),
-            row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid",
+            arrearStatusText(row),
           ]),
           total: filtered.reduce((sum: number, row: any) => sum + Number(row.remaining), 0),
         }], "Arrears Report", co, filterStr);
@@ -611,7 +627,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         filtered.map((row: any) => [
           row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
           row.shareholder?.phone ?? "—", row.monthLabel, fmtDate(row.dueDate), row.project?.project_name ?? "—", row.plotNumber,
-          Number(row.amount), Number(row.remaining), row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid",
+          Number(row.amount), Number(row.remaining), arrearStatusText(row),
         ]));
     } else if (type === "contributionsList") {
       downloadExcel(`contributions-list-${stamp}`, "Contributions List",
@@ -862,10 +878,15 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                       {row.status !== "paid" && Number(row.paid) > 0 && <p className={`text-[10px] ${row.status === "upcoming" ? "text-amber-600" : "text-rose-600"}`}>{fmtKESFull(Number(row.remaining))} left</p>}
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.status === "paid" ? "bg-emerald-50 text-emerald-700" : row.status === "upcoming" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"}`}>
-                        {row.status === "paid" ? "Paid" : row.status === "upcoming" ? "Upcoming" : "Not paid"}
-                      </span>
-                      {row.status === "upcoming" && <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Due {fmtDate(row.dueDate)}</p>}
+                      {(() => {
+                        const st = arrearStatusInfo(row);
+                        return (
+                          <>
+                            <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${st.badge}`}>{st.label}</span>
+                            {st.sub && <p className={`mt-0.5 text-[10px] font-semibold ${st.subColor}`}>{st.sub}</p>}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1.5">
