@@ -45,7 +45,7 @@ function arrearStatusInfo(row: { status: string; dueDate: string }): { label: st
     return { label: "Deadline Today", sub: due, badge: "bg-black text-white", subColor: "text-gray-900" };
   if (row.status === "upcoming") return { label: "Upcoming", sub: due, badge: "bg-green-600 text-white", subColor: "text-green-700" };
   const days = Math.max(1, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.dueDate}T00:00:00Z`)) / 86_400_000));
-  return { label: `In Arrears · ${days} day${days === 1 ? "" : "s"}`, sub: due, badge: "bg-red-600 text-black", subColor: "text-red-600" };
+  return { label: `In Arrears · ${days} day${days === 1 ? "" : "s"}`, sub: due, badge: "bg-red-600 text-white", subColor: "text-red-600" };
 }
 const arrearStatusText = (row: { status: string; dueDate: string }) => arrearStatusInfo(row).label.replace(" · ", " (") + (row.status === "unpaid" ? ")" : "");
 
