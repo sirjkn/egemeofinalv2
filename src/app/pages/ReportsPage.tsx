@@ -43,7 +43,7 @@ function arrearStatusInfo(row: { status: string; dueDate: string }): { label: st
   if (row.status === "paid") return { label: "Paid", sub: "", badge: "bg-emerald-50 text-emerald-700", subColor: "" };
   if (row.status === "upcoming" && row.dueDate === today)
     return { label: "Deadline Today", sub: due, badge: "bg-red-600 text-white", subColor: "text-red-600" };
-  if (row.status === "upcoming") return { label: "Upcoming", sub: due, badge: "bg-amber-50 text-amber-700", subColor: "text-amber-700" };
+  if (row.status === "upcoming") return { label: "Upcoming", sub: due, badge: "bg-green-600 text-white", subColor: "text-green-700" };
   const days = Math.max(1, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.dueDate}T00:00:00Z`)) / 86_400_000));
   return { label: `In Arrears · ${days} day${days === 1 ? "" : "s"}`, sub: due, badge: "bg-rose-50 text-rose-700", subColor: "text-rose-500" };
 }
