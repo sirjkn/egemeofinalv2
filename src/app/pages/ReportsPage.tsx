@@ -17,6 +17,7 @@ import {
 import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
 import { computePlotArrears, todayEAT } from "@/lib/arrears";
+import { MemberLink, ProjectLink, PlotLink } from "@/app/components/EntityLinks";
 import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
 import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
 
@@ -1021,7 +1022,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
               {filtered.map((r: any, i: number) => (
                 <tr key={r.id} className="border-t hover:bg-gray-50" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#eef2ff" }}>
                   <td className="px-3 py-1.5 text-xs text-gray-400">{i + 1}</td>
-                  <td className="px-3 py-1.5 font-semibold text-xs">{r.name}</td>
+                  <td className="px-3 py-1.5 font-semibold text-xs"><MemberLink type="shareholder" name={r.name} /></td>
                   <td className="px-3 py-1.5 text-xs font-bold" style={{ color: "#6366f1" }}>EW#{r.member_number}</td>
                   <td className="px-3 py-1.5 text-xs font-bold text-right" style={{ color: Number(r.amount) > 0 ? "#16a34a" : "#94a3b8" }}>{fmtKESFull(Number(r.amount))}</td>
                 </tr>
@@ -1068,7 +1069,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                 {filtered.map((c: any, i: number) => (
                   <tr key={c.id} className="border-t hover:bg-gray-50"
                     style={{ borderColor: "var(--border)", background: c.status === "unpaid" ? "#fff5f5" : i % 2 === 0 ? "#fff" : "#dbeafe" }}>
-                    <td className="px-3 py-1.5 font-semibold text-xs">{c.shareholder?.name ?? "—"}</td>
+                    <td className="px-3 py-1.5 font-semibold text-xs"><MemberLink type="shareholder" name={c.shareholder?.name} /></td>
                     <td className="px-3 py-1.5 text-xs font-bold" style={{ color: "#6366f1" }}>EW#{c.shareholder?.member_number}</td>
                     <td className="px-3 py-1.5 text-xs">{c.month ? MONTHS[c.month - 1] : "—"}</td>
                     <td className="px-3 py-1.5 text-xs text-gray-500">{c.year ?? "—"}</td>
@@ -1158,7 +1159,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             <tbody>
               {filtered.map((r: any, i: number) => (
                 <tr key={r.id} className="border-t hover:bg-gray-50" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#dbeafe" }}>
-                  <td className="px-3 py-1.5 font-semibold text-xs">{r.shareholder?.name ?? "Unknown"}</td>
+                  <td className="px-3 py-1.5 font-semibold text-xs"><MemberLink type="shareholder" name={r.shareholder?.name}>{r.shareholder?.name ?? "Unknown"}</MemberLink></td>
                   <td className="px-3 py-1.5 text-xs font-bold text-red-500">EW#{r.shareholder?.member_number ?? "—"}</td>
                   <td className="px-3 py-1.5 font-bold text-xs text-red-600">{fmtKESFull(Number(r.amount))}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{fmtDate(r.refund_date)}</td>
@@ -1191,7 +1192,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
               {rows.map((s: any, i: number) => (
                 <tr key={s.id} className="border-t hover:bg-gray-50" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#dbeafe" }}>
                   <td className="px-3 py-1.5 font-bold text-xs" style={{ color: "#6366f1" }}>EW#{s.member_number}</td>
-                  <td className="px-3 py-1.5 font-semibold text-xs">{s.name}</td>
+                  <td className="px-3 py-1.5 font-semibold text-xs"><MemberLink type="shareholder" name={s.name} /></td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{s.phone}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-400">{s.email || "—"}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{fmtDate(s.joined_date)}</td>
@@ -1222,7 +1223,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
               {rows.map((c: any, i: number) => (
                 <tr key={c.id} className="border-t hover:bg-gray-50" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#dbeafe" }}>
                   <td className="px-3 py-1.5 font-bold text-xs text-purple-600">{c.member_number}</td>
-                  <td className="px-3 py-1.5 font-semibold text-xs">{c.name}</td>
+                  <td className="px-3 py-1.5 font-semibold text-xs"><MemberLink type="client" name={c.name} /></td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{c.phone}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-400">{c.email || "—"}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{fmtDate(c.joined_date)}</td>
@@ -1256,14 +1257,14 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                 const memberNo = isInvestor ? (r.investor?.member_number ?? "—") : (r.shareholder?.member_number ?? "—");
                 return (
                   <tr key={r.id} className="border-t hover:bg-gray-50" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#fef9ec" }}>
-                    <td className="px-3 py-1.5 font-semibold text-xs">{name}</td>
+                    <td className="px-3 py-1.5 font-semibold text-xs"><MemberLink type={isInvestor ? "investor" : "shareholder"} name={name === "—" ? null : name}>{name}</MemberLink></td>
                     <td className="px-3 py-1.5 text-xs font-bold" style={{ color: "#d97706" }}>EW#{memberNo}</td>
                     <td className="px-3 py-1.5">
                       {isInvestor
                         ? <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">Investor</span>
                         : <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600">Shareholder</span>}
                     </td>
-                    <td className="px-3 py-1.5 text-xs font-semibold text-gray-700">{r.project?.project_name ?? "—"}</td>
+                    <td className="px-3 py-1.5 text-xs font-semibold text-gray-700"><ProjectLink projectId={r.project?.id ?? r.project_id}>{r.project?.project_name ?? "—"}</ProjectLink></td>
                     <td className="px-3 py-1.5 text-xs text-gray-500">{fmtDate(r.distributed_at?.slice(0, 10))}</td>
                     <td className="px-3 py-1.5 font-bold text-xs text-amber-600">{fmtKESFull(Number(r.amount))}</td>
                     <td className="px-3 py-1.5 text-xs text-gray-400 max-w-[140px] truncate">{r.notes || "—"}</td>
@@ -1338,7 +1339,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
               <tbody>
                 {[...contribRes].sort((a: any, b: any) => b.total - a.total).slice(0, 10).map((s: any, i: number) => (
                   <tr key={s.shareholder.id} className="border-t" style={{ borderColor: "var(--border)", background: i % 2 === 0 ? "#fff" : "#dbeafe" }}>
-                    <td className="px-3 py-1.5 text-xs font-semibold">{s.shareholder.name}</td>
+                    <td className="px-3 py-1.5 text-xs font-semibold"><MemberLink type="shareholder" name={s.shareholder.name} /></td>
                     <td className="px-3 py-1.5 text-xs font-bold" style={{ color: "#6366f1" }}>EW#{s.shareholder.member_number}</td>
                     <td className="px-3 py-1.5 text-xs font-bold" style={{ color: "#22c55e" }}>{fmtKESFull(s.total)}</td>
                     <td className="px-3 py-1.5 text-xs text-gray-500">{s.count}</td>

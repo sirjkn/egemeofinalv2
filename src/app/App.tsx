@@ -43,6 +43,7 @@ import { downloadExcel } from "@/lib/excel";
 import { toast, Toaster } from "sonner";
 import { LoginPage, SetPasswordPage, fetchProfile, type UserProfile, phoneToEmail } from "@/app/pages/AuthPage";
 import { ImpersonationCtx, useImpersonation } from "@/lib/impersonation";
+import { MemberLink, ProjectLink } from "@/app/components/EntityLinks";
 import { computePlotArrears, unpaidArrearsTotal, todayEAT, type Arrear } from "@/lib/arrears";
 import { ShareholderPortal, ClientPortal, InvestorPortal } from "@/app/pages/MemberPortal";
 import {
@@ -1016,7 +1017,7 @@ function ShareholderProjectsAccordion({ shareholderId }: { shareholderId: number
           {enrollments.map((e) => (
             <div key={e.id} className="flex items-center justify-between px-3 py-2 rounded-xl" style={{ background: "#fff7ed", border: "1px solid #fed7aa" }}>
               <div>
-                <p className="text-xs font-bold" style={{ color: "#ea580c" }}>{e.project?.project_name ?? "—"}</p>
+                <p className="text-xs font-bold" style={{ color: "#ea580c" }}><ProjectLink projectId={e.project_id ?? e.project?.id}>{e.project?.project_name ?? "—"}</ProjectLink></p>
                 <p className="text-[10px] text-gray-400">{e.project?.location ?? ""}</p>
               </div>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-600">
@@ -3670,7 +3671,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                   return (
                     <tr key={shareholder.id} className="border-t" style={{ borderColor: "#fff", background: index % 2 === 0 ? "#f8fafc" : "#d6dee9" }}>
                       <td className="px-3 py-2 font-semibold text-slate-700 border-r border-white">{shareholder.memberNumber || index + 1}.</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900 border-r border-white whitespace-nowrap">{shareholder.name}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-900 border-r border-white whitespace-nowrap"><MemberLink type="shareholder" name={shareholder.name} /></td>
                       <td className="px-3 py-2 font-bold text-slate-800 border-r border-white whitespace-nowrap">{fmtKESFull(shareholder.contribution)}</td>
                       {visibleReportProjects.length === 0 ? (
                         <td className="px-3 py-2 text-gray-400 border-r border-white">—</td>
@@ -3790,7 +3791,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 {debtsByProject.map((row, index) => (
                   <div key={row.id} className={`flex items-center gap-3 py-3 ${index < debtsByProject.length - 1 ? "border-b" : ""}`}
                     style={{ borderColor: "#fee2e2" }}>
-                    <p className="text-sm font-semibold flex-1 min-w-0 truncate" style={{ color: "#1a202c" }}>{row.name}</p>
+                    <p className="text-sm font-semibold flex-1 min-w-0 truncate" style={{ color: "#1a202c" }}><ProjectLink projectId={row.id}>{row.name}</ProjectLink></p>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {row.total <= 0 ? (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold tracking-wide text-white bg-green-600 whitespace-nowrap">
@@ -5898,7 +5899,7 @@ function RefundsPage() {
                         {r.shareholder ? initials(r.shareholder.name) : "?"}
                       </div>
                       <div>
-                        <div className="font-semibold text-sm" style={{ color: "#1a202c" }}>{r.shareholder?.name ?? "Unknown"}</div>
+                        <div className="font-semibold text-sm" style={{ color: "#1a202c" }}><MemberLink type="shareholder" name={r.shareholder?.name}>{r.shareholder?.name ?? "Unknown"}</MemberLink></div>
                         <div className="text-xs text-gray-400">EW#{r.shareholder?.member_number ?? "—"}</div>
                       </div>
                     </div>

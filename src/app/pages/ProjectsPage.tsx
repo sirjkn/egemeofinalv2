@@ -15,6 +15,7 @@ import {
   type Project, type Plot, type PlotPayment, type Shareholder, type Client,
   type PlotAssignPayload, type ProfitDistribution, type PlotCoOwner,
 } from "@/lib/api";
+import { MemberLink } from "@/app/components/EntityLinks";
 import { fmtKES, fmtKESFull, fmtDateTime } from "@/app/shared";
 import { getPaymentSettings } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
@@ -2751,7 +2752,7 @@ function ExternalInvestmentPage({
                   {/* Details */}
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-semibold truncate" style={{ color: "#1a202c" }}>
-                      {inv.investor?.name ?? "Unknown Investor"}
+                      <MemberLink type="investor" name={inv.investor?.name}>{inv.investor?.name ?? "Unknown Investor"}</MemberLink>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-[10px] font-bold" style={{ color: "#ca8a04" }}>EI#{inv.investor?.member_number}</span>
@@ -3502,7 +3503,7 @@ function ProjectDetailView({
                     return (
                       <div key={e.id} className="px-4 py-2.5 flex items-center gap-3">
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold truncate" style={{ color: "#1a202c" }}>{e.shareholder?.name}</p>
+                          <p className="text-xs font-semibold truncate" style={{ color: "#1a202c" }}><MemberLink type="shareholder" name={e.shareholder?.name} /></p>
                           <p className="text-[10px] text-gray-400">
                             EW#{e.shareholder?.member_number}
                             {alreadyDist && <span className="ml-1.5 text-green-600 font-semibold">· {fmtKES(received)} Earned from this project</span>}
@@ -3617,7 +3618,7 @@ function ProjectDetailView({
                                         ? `EW#${shareholders.find((x) => x.id === p.assigned_to_id)?.member_number ?? p.assigned_to_id}`
                                         : clients.find((x) => x.id === p.assigned_to_id)?.member_number ?? `#${p.assigned_to_id}`}
                                     </span>
-                                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}>{assignedName(p).split(" (")[0]}</span>
+                                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}><MemberLink type={p.assigned_to_type} name={assignedName(p).split(" (")[0]} /></span>
                                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
                                       style={{ background: p.assigned_to_type === "shareholder" ? "#eff6ff" : "#fef3c7", color: p.assigned_to_type === "shareholder" ? "#2563eb" : "#d97706" }}>
                                       {p.assigned_to_type === "shareholder" ? "Shareholder" : "Client"}
@@ -3629,7 +3630,7 @@ function ProjectDetailView({
                                     return (
                                       <div key={co.id} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: "#dbeafe" }}>
                                         <span className="text-[10px] font-bold text-indigo-500 w-16 shrink-0">{m.num}</span>
-                                        <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}>{m.name}</span>
+                                        <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}><MemberLink type={co.member_type} name={m.name} /></span>
                                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
                                           style={{ background: co.member_type === "shareholder" ? "#eff6ff" : "#fef3c7", color: co.member_type === "shareholder" ? "#2563eb" : "#d97706" }}>
                                           {m.type}
