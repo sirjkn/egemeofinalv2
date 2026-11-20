@@ -137,7 +137,15 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   const [arrearStatusF, setArrearStatusF] = useState<"unpaid" | "paid" | "">("unpaid");
   // Picking a To date of today or later also lists repayments due up to that date
   // which are not yet paid (members who have not defaulted yet), marked "Upcoming".
-  const includeUpcoming = type === "debtors" && !!dateTo && dateTo >= todayEAT();
+  // Upcoming window ends at the To date, or — when only From is set — at the From date,
+  // so picking today's date (in either box) lists everyone whose deadline is today.
+  const upcomingEnd = (() => {
+    if (type !== "debtors") return "";
+    const today = todayEAT();
+    const end = dateTo || dateFrom;
+    return end && end >= today ? end : "";
+  })();
+  const includeUpcoming = !!upcomingEnd;
   const [payRequest, setPayRequest] = useState<ArrearPayRequest | null>(null);
   const [notifyState, setNotifyState] = useState<Record<string, { status: "sending" | "sent" | "error"; message?: string }>>({});
 
@@ -228,7 +236,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         const clientMap = Object.fromEntries(debtorClients.map((m) => [m.id, m]));
         // Upcoming window: from today up to a To date that is today or later.
         const today = todayEAT();
-        const upcomingUntil = includeUpcoming ? dateTo : undefined;
+        const upcomingUntil = includeUpcoming ? upcomingEnd : undefined;
         const projectMap = Object.fromEntries(projects.map((pr) => [pr.id, pr]));
         const arrearRows = (debtPlots ?? []).flatMap((plot: any) => {
           const member = plot.assigned_to_type === "client"
@@ -259,7 +267,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         setRows(arrearRows
           // "Not paid" covers overdue arrears and (when included) upcoming repayments.
           .filter((row: any) => !arrearStatusF || row.status === arrearStatusF || (arrearStatusF === "unpaid" && row.status === "upcoming"))
-          .filter((row: any) => (!dateFrom || row.dueDate >= dateFrom) && (!dateTo || row.dueDate <= dateTo)));
+          .filter((row: any) => (!dateFrom || row.dueDate >= dateFrom) && (!dateTo || row.dueDate <= dateTo) && (!upcomingEnd || row.dueDate <= upcomingEnd)));
 
       } else if (type === "profits") {
         let q = supabase
@@ -430,7 +438,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
       }
     } catch { setRows([]); }
     finally { setLoading(false); }
-  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, arrearStatusF, includeUpcoming, shareholders, debtorClients, projects]);
+  }, [type, yearF, monthF, modeF, purposeF, statusF, dateFrom, dateTo, search, listStatusF, projectF, contribStatusF, shareholderF, memberTypeF, plotF, arrearStatusF, includeUpcoming, upcomingEnd, shareholders, debtorClients, projects]);
 
   useEffect(() => { load(); }, [load]);
 
