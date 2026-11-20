@@ -1,15 +1,19 @@
 // ─── Plot arrears ─────────────────────────────────────────────────────────────
 //
-// A plot is repaid in monthly instalments of `min_monthly_payment` (or
-// price / loan_duration_months when no minimum is set). The first instalment
-// falls due in the month AFTER the plot was allocated, on the day-of-month of
-// the plot's `deadline`. The plots table has no allocation timestamp; the
-// "Payment Deadline" picked at allocation defaults to the allocation day, so
-// its month is used as the allocation month.
+// Rule: EACH MONTH ON ITS OWN.
+// A plot is repaid monthly: at least `min_monthly_payment` (or
+// price / loan_duration_months when no minimum is set) must be paid IN each
+// month, on or before that month's deadline (day-of-month of `plot.deadline`).
+// Paying extra in an earlier month does NOT cover a later month.
 //
-// Payments are applied oldest-first (FIFO) across instalments. An instalment
-// whose deadline has passed is an ARREAR if it was not fully covered on or
-// before its deadline. It stays listed once covered later, marked "paid".
+// First month: the month AFTER the plot was allocated. The plots table has no
+// allocation date, so the allocation month is the earlier of the deadline's
+// month and the month of the first recorded payment.
+//
+// A month whose deadline has passed without the minimum is an ARREAR. Later
+// payments clear outstanding arrears first (oldest first); whatever is left
+// counts toward the month the payment falls in. A cleared arrear stays listed,
+// marked "paid".
 
 export interface ArrearPlot {
   id: number;
@@ -79,8 +83,8 @@ export function monthlyRepayment(plot: ArrearPlot): number {
 
 /**
  * All arrears (paid and unpaid) for one plot, oldest first.
- * Pass `includeUpcomingUntil` (YYYY-MM-DD) to also get instalments due between
- * today and that date which are not yet fully paid, with status "upcoming".
+ * Pass `includeUpcomingUntil` (YYYY-MM-DD) to also get months due between today
+ * and that date which are not yet fully paid, with status "upcoming".
  */
 export function computePlotArrears(
   plot: ArrearPlot,
@@ -92,85 +96,98 @@ export function computePlotArrears(
   const monthly = monthlyRepayment(plot);
   const anchor = String(plot.deadline ?? "").slice(0, 10);
   if (!(price > 0) || !(monthly > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(anchor)) return [];
-
-  const [ay, am, ad] = anchor.split("-").map(Number);
-  const deadlineDay = Math.max(1, ad);
-
-  // Build instalments until the price is covered, stopping at those not yet due.
-  const instalments: { period: string; monthLabel: string; dueDate: string; amount: number }[] = [];
-  let scheduled = 0;
-  for (let k = 1; scheduled < price - 0.005 && k <= 600; k++) {
-    const d = new Date(ay, am - 1 + k, 1);
-    const y = d.getFullYear(), m0 = d.getMonth();
-    const day = Math.min(deadlineDay, new Date(y, m0 + 1, 0).getDate());
-    const amount = Math.min(monthly, price - scheduled);
-    scheduled += amount;
-    instalments.push({ period: `${y}-${pad(m0 + 1)}`, monthLabel: `${MONTH_SHORT[m0]} ${y}`, dueDate: ymd(y, m0, day), amount });
-  }
+  const deadlineDay = Math.max(1, Number(anchor.slice(8, 10)));
 
   // Payments oldest-first. If the stored paid_amount is higher than the recorded
-  // payments (legacy data), treat the gap as paid on allocation.
+  // payments (legacy data), treat the gap as paid on the deadline date.
   const pmts = payments
     .filter((p) => Number(p.plot_id) === Number(plot.id))
     .map((p) => ({ date: String(p.payment_date ?? p.created_at ?? "").slice(0, 10), amount: Number(p.amount) }))
-    .filter((p) => p.amount > 0 && p.date)
+    .filter((p) => p.amount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(p.date))
     .sort((a, b) => a.date.localeCompare(b.date));
   const recorded = pmts.reduce((s, p) => s + p.amount, 0);
   const stored = Number(plot.paid_amount ?? 0);
-  if (stored - recorded > 0.005) pmts.unshift({ date: anchor, amount: stored - recorded });
+  if (stored - recorded > 0.005) {
+    pmts.push({ date: anchor, amount: stored - recorded });
+    pmts.sort((a, b) => a.date.localeCompare(b.date));
+  }
 
-  // FIFO allocation. Months due before ARREARS_START_DATE only take payments made
-  // before that date, so an old shortfall never consumes newer payments (earlier
-  // overpayments still carry forward to later months).
-  let pi = 0;
-  let left = pmts[0]?.amount ?? 0;
+  // Allocation month = earlier of the deadline's month and the first payment's month.
+  const firstPaymentMonth = pmts[0]?.date.slice(0, 7);
+  const allocMonth = firstPaymentMonth && firstPaymentMonth < anchor.slice(0, 7) ? firstPaymentMonth : anchor.slice(0, 7);
+  const [ay, am] = allocMonth.split("-").map(Number);
+
+  const until = options.includeUpcomingUntil;
+  const horizon = until && until > today ? until : today;
+
   const result: Arrear[] = [];
-  for (const inst of instalments) {
-    let paid = 0;
-    let clearedOn: string | null = null;
-    const legacyMonth = inst.dueDate < ARREARS_START_DATE;
-    while (paid < inst.amount - 0.005 && pi < pmts.length && (!legacyMonth || pmts[pi].date < ARREARS_START_DATE)) {
-      const take = Math.min(left, inst.amount - paid);
-      paid += take;
+  const open: Arrear[] = []; // unpaid arrears, oldest first
+  let paidSoFar = 0;         // all money received so far (to know the remaining balance)
+  let pi = 0;
+
+  // A payment first clears arrears that were already overdue when it was made.
+  const settle = (p: { date: string; amount: number }): number => {
+    let left = p.amount;
+    while (left > 0.005 && open.length && open[0].dueDate < p.date) {
+      const a = open[0];
+      const take = Math.min(left, a.remaining);
+      a.paid += take;
+      a.remaining -= take;
       left -= take;
-      if (paid >= inst.amount - 0.005) clearedOn = pmts[pi].date;
-      if (left <= 0.005) { pi++; left = pmts[pi]?.amount ?? 0; }
-    }
-    if (inst.dueDate >= today) {
-      // Deadline not passed yet — not an arrear. Optionally report it as upcoming.
-      const until = options.includeUpcomingUntil;
-      if (until && inst.dueDate <= until && clearedOn === null) {
-        result.push({
-          plotId: Number(plot.id),
-          plotNumber: plot.plot_number,
-          period: inst.period,
-          monthLabel: inst.monthLabel,
-          dueDate: inst.dueDate,
-          amount: inst.amount,
-          paid,
-          remaining: Math.max(0, inst.amount - paid),
-          status: "upcoming",
-          clearedOn: null,
-        });
+      if (a.remaining <= 0.005) {
+        a.remaining = 0;
+        a.status = "paid";
+        a.clearedOn = p.date;
+        open.shift();
       }
-      continue;
     }
-    if (inst.dueDate < ARREARS_START_DATE) continue; // before arrears rules took effect
-    const onTime = clearedOn !== null && clearedOn <= inst.dueDate;
-    if (onTime) continue;
-    result.push({
+    return left;
+  };
+
+  for (let k = 1; k <= 600; k++) {
+    const d = new Date(ay, am - 1 + k, 1);
+    const y = d.getFullYear(), m0 = d.getMonth();
+    const monthStart = ymd(y, m0, 1);
+    const dueDate = ymd(y, m0, Math.min(deadlineDay, new Date(y, m0 + 1, 0).getDate()));
+    if (dueDate > horizon) break;
+
+    // Payments before this month (incl. those after last month's deadline) only clear arrears.
+    while (pi < pmts.length && pmts[pi].date < monthStart) { paidSoFar += pmts[pi].amount; settle(pmts[pi]); pi++; }
+
+    const required = Math.min(monthly, Math.max(0, price - paidSoFar));
+    if (required <= 0.005) break; // plot fully paid
+
+    // Payments in this month up to its deadline: arrears first, the rest counts for this month.
+    let onTime = 0;
+    while (pi < pmts.length && pmts[pi].date <= dueDate) { paidSoFar += pmts[pi].amount; onTime += settle(pmts[pi]); pi++; }
+
+    const shortfall = Math.max(0, required - onTime);
+    const entry = (status: Arrear["status"]): Arrear => ({
       plotId: Number(plot.id),
       plotNumber: plot.plot_number,
-      period: inst.period,
-      monthLabel: inst.monthLabel,
-      dueDate: inst.dueDate,
-      amount: inst.amount,
-      paid,
-      remaining: Math.max(0, inst.amount - paid),
-      status: clearedOn ? "paid" : "unpaid",
-      clearedOn,
+      period: `${y}-${pad(m0 + 1)}`,
+      monthLabel: `${MONTH_SHORT[m0]} ${y}`,
+      dueDate,
+      amount: required,
+      paid: Math.min(onTime, required),
+      remaining: shortfall,
+      status,
+      clearedOn: null,
     });
+
+    if (dueDate >= today) {
+      // Not due yet — optionally report it as upcoming.
+      if (until && dueDate <= until && shortfall > 0.005) result.push(entry("upcoming"));
+      continue;
+    }
+    if (dueDate < ARREARS_START_DATE || shortfall <= 0.005) continue; // before the rules, or paid on time
+    const arrear = entry("unpaid");
+    result.push(arrear);
+    open.push(arrear);
   }
+
+  // Payments after the last scheduled month can still clear arrears.
+  while (pi < pmts.length) { settle(pmts[pi]); pi++; }
   return result;
 }
 
