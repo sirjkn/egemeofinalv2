@@ -881,10 +881,10 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                       {(() => {
                         const st = arrearStatusInfo(row);
                         return (
-                          <>
+                          <div className="flex flex-col items-start gap-0.5">
                             <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${st.badge}`}>{st.label}</span>
-                            {st.sub && <p className={`mt-0.5 text-[10px] font-semibold ${st.subColor}`}>{st.sub}</p>}
-                          </>
+                            {st.sub && <p className={`px-2 text-[10px] font-semibold whitespace-nowrap ${st.subColor}`}>{st.sub}</p>}
+                          </div>
                         );
                       })()}
                     </td>
