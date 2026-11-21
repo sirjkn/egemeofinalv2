@@ -75,8 +75,16 @@ export const DEFAULT_TEMPLATES: Record<string, string> = {
     "Dear {name}, your monthly repayment of {amount} for plot {plotNumber} is due on {dueDate}. Please pay on or before the due date to avoid arrears. Regards Egemeo",
 };
 
-// Substitute {variable} placeholders in a template string
+/** First name only, e.g. "Tabitha Njeri" -> "Tabitha". */
+export function firstNameOf(name: string | null | undefined): string {
+  const full = String(name ?? "").trim();
+  return full.split(/\s+/)[0] || full;
+}
+
+// Substitute {variable} placeholders in a template string.
+// {name} is always the member's FIRST name in every SMS.
 export function interpolate(template: string, vars: Record<string, string>): string {
+  if ("name" in vars) vars = { ...vars, name: firstNameOf(vars.name) };
   return Object.entries(vars).reduce(
     (t, [key, val]) => t.replace(new RegExp(`\\{${key}\\}`, "g"), val),
     template,
