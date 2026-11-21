@@ -15,7 +15,7 @@ import {
   type Project, type Plot, type PlotPayment, type Shareholder, type Client,
   type PlotAssignPayload, type ProfitDistribution, type PlotCoOwner,
 } from "@/lib/api";
-import { MemberLink } from "@/app/components/EntityLinks";
+import { MemberLink, PlotLink, ProjectLink } from "@/app/components/EntityLinks";
 import { fmtKES, fmtKESFull, fmtDateTime } from "@/app/shared";
 import { getPaymentSettings } from "@/lib/mpesa";
 import { getEnabledPaymentMethodKeys } from "@/lib/settingsApi";
@@ -985,28 +985,17 @@ function EditPlotPaymentModal({ payment, plotNumber, onClose, onSaved }: {
 
 // ─── Assigned Plot Card (used in member dashboards) ───────────────────────────
 
-export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onRefresh, onNavigatePlot, onNavigateProject }: {
+export function PlotPaymentsPanel({ plot, onPay, onRefresh }: {
   plot: Plot & { project?: Project };
-  isAdmin: boolean;
   onPay?: () => void;
-  onUpload?: () => void;
-  onRemove?: () => void;
   onRefresh?: () => void;
-  onNavigatePlot?: () => void;
-  onNavigateProject?: () => void;
 }) {
-  const [editOpen, setEditOpen] = useState(false);
-
-  const handleEditSave = async (data: { plot_number: string; price: number; size: number }) => {
-    await plotsApi.update(plot.id, data);
-    onRefresh?.();
-  };
   const isInstalment = plot.payment_mode === "installment";
   const price = Number(plot.price);
   const paid = Number(plot.paid_amount);
   const due = Math.max(0, price - paid);
   const pct = price > 0 ? Math.round((paid / price) * 100) : 0;
-  const [expanded, setExpanded] = useState(false);
+  const expanded = true; // the panel is only mounted while open
   const [tab, setTab] = useState<"schedule" | "history">(isInstalment ? "schedule" : "history");
   const [payments, setPayments] = useState<PlotPayment[]>([]);
   const [loadingPay, setLoadingPay] = useState(false);
@@ -1014,25 +1003,7 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [reconciling, setReconciling] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const [editPayment, setEditPayment] = useState<PlotPayment | null>(null);
-  const [coOwners, setCoOwners] = useState<PlotCoOwner[]>([]);
-  const [coOwnersExpanded, setCoOwnersExpanded] = useState(false);
-  const [loadingCoOwners, setLoadingCoOwners] = useState(false);
-
-  const loadCoOwners = useCallback(async () => {
-    setLoadingCoOwners(true);
-    try {
-      const data = await plotCoOwnersApi.listByPlot(plot.id);
-      setCoOwners(data);
-    } catch { setCoOwners([]); }
-    finally { setLoadingCoOwners(false); }
-  }, [plot.id]);
-
-  useEffect(() => {
-    loadCoOwners();
-  }, [loadCoOwners]);
-
   const handleReconcile = async () => {
     const historySum = payments.reduce((s, p) => s + Number(p.amount), 0);
     const gap = paid - historySum;
@@ -1115,144 +1086,7 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
   const TABLE_ROW = "grid px-3 py-1.5 items-center text-xs";
 
   return (
-    <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "var(--border)" }}>
-      {/* ── Card header ── */}
-      <div className="px-4 py-3">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="flex items-center gap-1 flex-wrap font-bold text-sm">
-              {onNavigatePlot ? (
-                <button onClick={onNavigatePlot} className="hover:underline underline-offset-2 transition-colors hover:opacity-70" style={{ color: "#6366f1" }}>
-                  Plot {plot.plot_number}
-                </button>
-              ) : (
-                <span style={{ color: "#1a202c" }}>Plot {plot.plot_number}</span>
-              )}
-              {(plot.project as any)?.project_name && (
-                <>
-                  <span className="text-gray-300 font-normal">/</span>
-                  {onNavigateProject ? (
-                    <button onClick={onNavigateProject} className="hover:underline underline-offset-1 transition-colors" style={{ color: "#22c55e" }}>
-                      Project {(plot.project as any).project_name}
-                    </button>
-                  ) : (
-                    <span style={{ color: "#22c55e" }}>Project {(plot.project as any).project_name}</span>
-                  )}
-                </>
-              )}
-            </div>
-            {(plot.project as any)?.location && (
-              <p className="text-xs text-gray-400 mt-0.5">{(plot.project as any).location}</p>
-            )}
-            {plot.deadline && (() => {
-              const day = Number(plot.deadline.split("-")[2] ?? "0");
-              const ord = day === 1 ? "1st" : day === 2 ? "2nd" : day === 3 ? "3rd" : `${day}th`;
-              return <p className="text-[11px] font-semibold mt-0.5" style={{ color: "#f97316" }}>Deadline: {ord} of every month</p>;
-            })()}
-            {plot.min_monthly_payment != null && Number(plot.min_monthly_payment) > 0 && (
-              <p className="text-[11px] font-semibold mt-0.5 text-indigo-600">
-                Minimum per month: {fmtKESFull(Number(plot.min_monthly_payment))}
-              </p>
-            )}
-          </div>
-          <div className="text-right flex-shrink-0">
-            <p className="font-bold text-sm" style={{ color: "#6366f1" }}>{fmtKESFull(price)}</p>
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isInstalment ? "bg-blue-50 text-blue-600" : "bg-green-50 text-green-600"}`}>
-              {isInstalment ? "Instalments" : "Cash"}
-            </span>
-          </div>
-        </div>
-
-        {isInstalment && (
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
-            <span className="text-gray-400"><span className="font-semibold text-gray-600">{dur}</span> months</span>
-            <span className="text-gray-400"><span className="font-semibold text-gray-600">{fmtKES(monthlyInstalment)}</span>/mo</span>
-            {interestAmt > 0 && (
-              <span className="text-gray-400">
-                Interest: <span className="font-semibold text-amber-600">
-                  {plot.interest_type === "percentage" ? `${plot.interest_amount}%` : fmtKES(interestAmt)}
-                </span>
-              </span>
-            )}
-          </div>
-        )}
-
-        <p className="text-xs mt-2">
-          <span className="text-green-600 font-semibold">Paid: {fmtKESFull(paid)}</span>
-          {" · "}
-          <span className="text-red-500 font-semibold">Due: {fmtKESFull(due)}</span>
-        </p>
-        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>
-          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: "#22c55e" }} />
-        </div>
-        <div className="flex items-center justify-between mt-1">
-          <p className="text-[10px] text-gray-400">{pct}% {isInstalment && `· ${paidInstalments}/${dur} instalments paid`}</p>
-          <div className="flex items-center gap-2">
-            {coOwners.length > 0 && (
-              <button
-                onClick={() => setCoOwnersExpanded((v) => !v)}
-                className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md hover:bg-gray-100 transition-colors"
-                style={{ color: "#2563eb" }}>
-                <Users size={10} />
-                {coOwnersExpanded ? "Hide" : "View"} Co-Owners
-                <ChevronDown size={10} className={`transition-transform ${coOwnersExpanded ? "rotate-180" : ""}`} />
-              </button>
-            )}
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md hover:bg-gray-100 transition-colors"
-              style={{ color: "#6366f1" }}>
-              <History size={10} />
-              {expanded ? "Hide" : "View"} Payments
-              <ChevronDown size={10} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
-            </button>
-          </div>
-        </div>
-
-        {/* Co-owners expanded panel */}
-        {coOwnersExpanded && (
-          <div className="mt-2 rounded-xl border overflow-hidden" style={{ borderColor: "#dbeafe" }}>
-            {loadingCoOwners ? (
-              <div className="flex justify-center py-3"><Loader2 size={13} className="animate-spin text-gray-300" /></div>
-            ) : (
-              <>
-                {/* Primary owner row */}
-                <div className="grid px-3 py-2 items-center gap-2 border-b" style={{ gridTemplateColumns: "auto 1fr auto auto", borderColor: "#dbeafe", background: "#eff6ff" }}>
-                  <span className="text-[10px] font-bold text-indigo-500">
-                    {plot.assigned_to_type === "shareholder" ? `EW#${(plot as any).shareholder?.member_number ?? plot.assigned_to_id}` : (plot as any).client?.member_number ?? `#${plot.assigned_to_id}`}
-                  </span>
-                  <span className="text-xs font-semibold truncate" style={{ color: "#1a202c" }}>
-                    {plot.assigned_to_type === "shareholder" ? ((plot as any).shareholder?.name ?? "—") : ((plot as any).client?.name ?? "—")}
-                  </span>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                    style={{ background: plot.assigned_to_type === "shareholder" ? "#dbeafe" : "#fef3c7", color: plot.assigned_to_type === "shareholder" ? "#1d4ed8" : "#b45309" }}>
-                    {plot.assigned_to_type === "shareholder" ? "Shareholder" : "Client"}
-                  </span>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Primary</span>
-                </div>
-                {/* Co-owners */}
-                {coOwners.map((co, i) => {
-                  const m = (co as any).member;
-                  const num = m?.member_number ? `EW#${m.member_number}` : `#${co.member_id}`;
-                  const name = m?.name ?? `Member #${co.member_id}`;
-                  return (
-                    <div key={co.id} className="grid px-3 py-2 items-center gap-2 border-b last:border-b-0"
-                      style={{ gridTemplateColumns: "auto 1fr auto", borderColor: "#dbeafe", background: i % 2 === 0 ? "#fff" : "#f8fbff" }}>
-                      <span className="text-[10px] font-bold text-indigo-400">{num}</span>
-                      <span className="text-xs font-semibold truncate" style={{ color: "#1a202c" }}>{name}</span>
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                        style={{ background: co.member_type === "shareholder" ? "#dbeafe" : "#fef3c7", color: co.member_type === "shareholder" ? "#1d4ed8" : "#b45309" }}>
-                        {co.member_type === "shareholder" ? "Shareholder" : "Client"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
+    <div>
       {/* ── Expanded panel ── */}
       {expanded && (
         <div className="border-t" style={{ borderColor: "var(--border)" }}>
@@ -1486,40 +1320,6 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
         </div>
       )}
 
-      {/* ── Action buttons ── */}
-      <div className="grid grid-cols-4 border-t" style={{ borderColor: "var(--border)" }}>
-        {[
-          { label: "Edit",   icon: <Edit2 size={13} />,       color: "#64748b", bg: "#f8fafc", action: isAdmin ? () => setEditOpen(true) : undefined },
-          { label: "Pay",    icon: <Wallet size={13} />,      color: "#22c55e", bg: "#f0fdf4", action: onPay },
-          { label: "Upload", icon: <UploadCloud size={13} />, color: "#6366f1", bg: "#eef2ff", action: isAdmin ? onUpload : undefined },
-          { label: "Remove", icon: <RotateCcw size={13} />,   color: "#ef4444", bg: "#fef2f2", action: isAdmin ? () => setConfirmRemove(true) : undefined },
-        ].map(({ label, icon, color, bg, action }) => (
-          <button key={label} onClick={action} disabled={!action}
-            className="py-2.5 flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors hover:opacity-80 disabled:opacity-30 border-r last:border-r-0"
-            style={{ color, background: bg, borderColor: "var(--border)" }}>
-            {icon}{label}
-          </button>
-        ))}
-      </div>
-
-      {confirmRemove && (
-        <ConfirmModal
-          title="Remove Plot Assignment"
-          message={`Remove plot ${plot.plot_number} from this member? The plot will become unassigned but all payment records are kept.`}
-          confirmLabel="Remove"
-          onConfirm={() => { onRemove?.(); setConfirmRemove(false); }}
-          onCancel={() => setConfirmRemove(false)}
-        />
-      )}
-
-      {editOpen && (
-        <EditPlotModal
-          plot={plot}
-          onClose={() => setEditOpen(false)}
-          onSave={handleEditSave}
-        />
-      )}
-
       {editPayment && (
         <EditPlotPaymentModal
           payment={editPayment}
@@ -1529,6 +1329,513 @@ export function AssignedPlotCard({ plot, isAdmin, onPay, onUpload, onRemove, onR
         />
       )}
 
+    </div>
+  );
+}
+
+// ─── Member directory (shared, cached) ───────────────────────────────────────
+// Plot cards outside the Projects page don't receive member lists, so they load
+// them once and share the result.
+type DirMember = { id: number; name: string; member_number?: any; phone?: string };
+let directoryCache: Promise<{ shareholders: DirMember[]; clients: DirMember[] }> | null = null;
+function loadDirectory(force = false) {
+  if (!directoryCache || force) {
+    directoryCache = Promise.all([
+      supabase.from("shareholders").select("id,name,member_number,phone").order("name"),
+      supabase.from("clients").select("id,name,member_number,phone").order("name"),
+    ]).then(([sh, cl]) => ({ shareholders: (sh.data ?? []) as DirMember[], clients: (cl.data ?? []) as DirMember[] }))
+      .catch(() => ({ shareholders: [], clients: [] }));
+  }
+  return directoryCache;
+}
+function useDirectory(shareholders?: DirMember[], clients?: DirMember[]) {
+  const given = !!shareholders && !!clients;
+  const [dir, setDir] = useState<{ shareholders: DirMember[]; clients: DirMember[] }>(
+    given ? { shareholders: shareholders!, clients: clients! } : { shareholders: [], clients: [] });
+  useEffect(() => {
+    if (given) { setDir({ shareholders: shareholders!, clients: clients! }); return; }
+    let live = true;
+    loadDirectory().then((d) => { if (live) setDir(d); });
+    return () => { live = false; };
+  }, [given, shareholders, clients]);
+  return dir;
+}
+
+// ─── Record a plot payment (shared by every plot card) ────────────────────────
+export async function recordPlotPayment(args: {
+  plot: Plot; projectName?: string; ownerName: string; ownerPhone?: string;
+  amount: number; method: PayMethod; ref?: string; phone?: string;
+  extras?: { paidBy?: string; comment?: string; paymentDate?: string };
+}) {
+  const { plot, projectName, ownerName, ownerPhone, amount, method, ref, phone, extras } = args;
+  const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
+  let payerName = extras?.paidBy || ownerName;
+  let payerPhone = phone ?? ownerPhone ?? "";
+  if (method === "mpesa" && ref && !extras?.paidBy) {
+    // STK: resolve payer from the latest Safaricom callback (best effort).
+    try {
+      const { data: cbRow } = await supabase.from("app_settings").select("value").eq("key", "mpesa_callback_last").maybeSingle();
+      const stkCb = (cbRow?.value as any)?.Body?.stkCallback ?? cbRow?.value;
+      const cbPhone = String((stkCb?.CallbackMetadata?.Item ?? []).find((i: any) => i.Name === "PhoneNumber")?.Value ?? "");
+      if (cbPhone) {
+        payerPhone = cbPhone;
+        const norm = cbPhone.replace(/^254/, "0");
+        const [shRows, clRows] = await Promise.all([
+          supabase.from("shareholders").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
+          supabase.from("clients").select("name").or(`phone.eq.${cbPhone},phone.eq.${norm}`).limit(1),
+        ]);
+        const found = shRows.data?.[0]?.name ?? clRows.data?.[0]?.name;
+        if (found) payerName = found;
+      }
+    } catch { /* best effort */ }
+  }
+  const structuredNotes = JSON.stringify({
+    method: method === "mpesa" ? "Mpesa" : method === "bank" ? "Bank Transfer" : method === "cheque" ? "Cheque" : method === "commission" ? "Commission" : "Cash",
+    ref: ref ?? "", paidBy: payerName, phone: payerPhone, fine: "", status: "", note: extras?.comment ?? "",
+  });
+  await plotsApi.recordPayment(plot.id, amount, structuredNotes, today);
+  logActivity({ category: "plot", action: "payment", description: `Plot ${plot.plot_number} payment of KES ${amount.toLocaleString()} via ${method} by ${payerName}${projectName ? ` in project "${projectName}"` : ""}`, meta: { plot_id: plot.id, amount, method } });
+  const smsTo = payerPhone || ownerPhone;
+  if (smsTo) sendSms(smsTo, smsTemplates.plotReceipt(payerName, `KES ${amount.toLocaleString()}`, plot.plot_number, ref ?? undefined), SMS_TRIGGERS.plotReceipt).catch(() => {});
+  if (method === "mpesa") {
+    const { paymentsApi } = await import("@/lib/api");
+    const baseComment = `PHONE:${payerPhone}|ACCOUNT:${plot.plot_number}`;
+    await paymentsApi.create({
+      payment_id: ref ?? undefined, date_paid: today, amount, paid_by: payerName,
+      purpose: "Plot Payment", mode: "Mpesa",
+      comment: extras?.comment ? `${baseComment} · ${extras.comment}` : baseComment,
+    });
+  }
+}
+
+// ─── Edit Plot (details + assignment, with Unassign / Delete) ─────────────────
+function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, onSaved, onDelete }: {
+  plot: Plot; projectName: string;
+  shareholders: DirMember[]; clients: DirMember[];
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+  onDelete?: () => Promise<void>;
+}) {
+  const isAssigned = plot.status === "assigned" && !!plot.assigned_to_id;
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [plotName, setPlotName] = useState(plot.plot_number);
+  const [size, setSize] = useState(String(plot.size ?? ""));
+  const [plotPrice, setPlotPrice] = useState(String(plot.price ?? 0));
+  const [assignTo, setAssignTo] = useState<"shareholder" | "client">(plot.assigned_to_type ?? "shareholder");
+  const [memberId, setMemberId] = useState<number | "">(plot.assigned_to_id ?? "");
+  const [payMode, setPayMode] = useState<"cash" | "installment">(plot.payment_mode ?? "cash");
+  const [duration, setDuration] = useState(plot.loan_duration_months ?? 12);
+  const [intType, setIntType] = useState<"fixed" | "percentage">(plot.interest_type ?? "fixed");
+  const [intAmount, setIntAmount] = useState(plot.interest_amount != null ? String(plot.interest_amount) : "");
+  const [minMonthly, setMinMonthly] = useState(plot.min_monthly_payment != null ? String(plot.min_monthly_payment) : "");
+  const [deadline, setDeadline] = useState(plot.deadline ?? ""); // stays empty if never set
+  const hasBalance = Number(plot.price) - Number(plot.paid_amount ?? 0) > 0;
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [confirmUnassign, setConfirmUnassign] = useState<{ count: number; amount: number } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const list = assignTo === "shareholder" ? shareholders : clients;
+
+  const save = async () => {
+    if (!plotName.trim()) { setErr("Plot name is required."); return; }
+    const price = parseFloat(plotPrice);
+    if (!Number.isFinite(price) || price <= 0) { setErr("Plot price must be greater than zero."); return; }
+    let minimum = 0;
+    if (isAssigned) {
+      if (!memberId) { setErr("Please select a member."); return; }
+      minimum = parseFloat(minMonthly);
+      // Only required while there is still a balance to pay.
+      if (hasBalance && (!Number.isFinite(minimum) || minimum <= 0)) { setErr("Minimum payment per month must be greater than zero."); return; }
+    }
+    setSaving(true); setErr("");
+    try {
+      await plotsApi.update(plot.id, { plot_number: plotName.trim(), size: parseFloat(size) || 0, price });
+      if (isAssigned) {
+        await plotsApi.assign(plot.id, {
+          assigned_to_id: memberId as number, assigned_to_type: assignTo, payment_mode: payMode,
+          loan_duration_months: payMode === "installment" ? duration : undefined,
+          interest_type: payMode === "installment" ? intType : undefined,
+          interest_amount: payMode === "installment" && intAmount ? parseFloat(intAmount) : undefined,
+          min_monthly_payment: Number.isFinite(minimum) && minimum > 0 ? minimum : undefined,
+          deadline: deadline || undefined, price,
+        });
+        // New owner? Send the plot-assigned SMS.
+        if (memberId !== plot.assigned_to_id || assignTo !== plot.assigned_to_type) {
+          const m = list.find((x) => x.id === memberId);
+          if (m?.phone) sendSms(m.phone, smsTemplates.plotAssigned(m.name, plotName.trim(), projectName, `KES ${price.toLocaleString()}`), SMS_TRIGGERS.plotAssigned).catch(() => {});
+        }
+      }
+      logActivity({ category: "plot", action: "update", description: `Plot ${plotName.trim()} updated${projectName ? ` in project "${projectName}"` : ""}`, meta: { plot_id: plot.id } });
+      await onSaved();
+      onClose();
+    } catch (e: any) { setErr(e.message ?? "Could not save."); }
+    finally { setSaving(false); }
+  };
+
+  const askUnassign = async () => {
+    setErr("");
+    const { data } = await supabase.from("plot_payments").select("amount").eq("plot_id", plot.id);
+    setConfirmUnassign({ count: (data ?? []).length, amount: (data ?? []).reduce((t: number, r: any) => t + Number(r.amount), 0) });
+  };
+  const doUnassign = async () => {
+    setSaving(true); setErr("");
+    try {
+      const removed = await plotsApi.unassignAndClearPayments(plot.id);
+      logActivity({ category: "plot", action: "update", description: `Plot ${plot.plot_number} unassigned and cleared — ${removed.payments} payment(s) of KES ${removed.amount.toLocaleString()} deleted`, meta: { plot_id: plot.id, ...removed } });
+      setConfirmUnassign(null);
+      await onSaved();
+      onClose();
+    } catch (e: any) { setErr(e.message ?? "Could not unassign."); setConfirmUnassign(null); }
+    finally { setSaving(false); }
+  };
+
+  const field = "w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none";
+  const pick = (on: boolean) => on ? { borderColor: "#1e2d4a", color: "#1e2d4a", background: "#f0f4ff" } : { borderColor: "#e2e8f0", color: "#64748b" };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[92vh]">
+        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "var(--border)" }}>
+          <div>
+            <h2 className="font-bold text-base" style={{ color: "#1a202c" }}>Edit Plot {plot.plot_number}</h2>
+            <p className="text-xs text-gray-400">{projectName ? `${projectName} · ` : ""}{isAssigned ? "Plot details & assignment" : "Plot details"}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={16} /></button>
+        </div>
+        <div className="p-6 space-y-4 overflow-y-auto">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Plot</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2"><label className="text-xs font-semibold text-gray-600">Plot Name / Number</label>
+              <input value={plotName} onChange={(e) => setPlotName(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
+            <div><label className="text-xs font-semibold text-gray-600">Price (KES)</label>
+              <input type="number" min={1} value={plotPrice} onChange={(e) => setPlotPrice(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
+            <div><label className="text-xs font-semibold text-gray-600">Size (Acres)</label>
+              <input type="number" value={size} onChange={(e) => setSize(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
+          </div>
+
+          {isAssigned && (
+            <>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 pt-2">Assignment</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(["shareholder", "client"] as const).map((t) => (
+                  <button key={t} type="button" onClick={() => { setAssignTo(t); setMemberId(""); }}
+                    className="py-2.5 rounded-xl text-sm font-semibold border-2 transition-all" style={pick(assignTo === t)}>
+                    {t === "shareholder" ? `Shareholders (${shareholders.length})` : `Clients (${clients.length})`}
+                  </button>
+                ))}
+              </div>
+              <select value={memberId} onChange={(e) => setMemberId(e.target.value ? parseInt(e.target.value) : "")} className={field} style={{ borderColor: "var(--border)" }}>
+                <option value="">Choose a member…</option>
+                {list.map((m) => <option key={m.id} value={m.id}>{m.name} — {assignTo === "shareholder" ? `EW#${m.member_number}` : m.member_number}</option>)}
+              </select>
+              <div className="grid grid-cols-2 gap-2">
+                {(["cash", "installment"] as const).map((m) => (
+                  <button key={m} type="button" onClick={() => setPayMode(m)} className="py-2.5 rounded-xl text-sm font-semibold border-2 transition-all" style={pick(payMode === m)}>
+                    {m === "installment" ? "Instalments" : "Cash"}
+                  </button>
+                ))}
+              </div>
+              {payMode === "installment" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2"><label className="text-xs font-semibold text-gray-600">Loan Duration (months)</label>
+                    <input type="number" min={1} value={duration} onChange={(e) => setDuration(parseInt(e.target.value) || 12)} className={field} style={{ borderColor: "var(--border)" }} /></div>
+                  {(["fixed", "percentage"] as const).map((t) => (
+                    <button key={t} type="button" onClick={() => setIntType(t)} className="py-2 rounded-xl text-xs font-semibold border-2 transition-all" style={pick(intType === t)}>
+                      {t === "fixed" ? "Fixed Amount (KES)" : "Percentage (%)"}
+                    </button>
+                  ))}
+                  <div className="col-span-2"><label className="text-xs font-semibold text-gray-600">{intType === "fixed" ? "Interest Amount (KES)" : "Interest Rate (%)"}</label>
+                    <input type="number" value={intAmount} onChange={(e) => setIntAmount(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
+                </div>
+              )}
+              <div><label className="text-xs font-semibold text-gray-600">Minimum Payment Per Month (KES) {hasBalance && <span className="text-red-500">*</span>}</label>
+                <input type="number" min={1} value={minMonthly} onChange={(e) => setMinMonthly(e.target.value)} placeholder="e.g. 10000" className={field} style={{ borderColor: "var(--border)" }} /></div>
+              <div><label className="text-xs font-semibold text-gray-600">Payment Deadline</label>
+                <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} />
+                <p className="text-xs text-gray-400 mt-0.5">The day of this date is the monthly deadline.{!plot.deadline && " Leave empty if none."}</p></div>
+            </>
+          )}
+          {err && <p className="text-xs text-red-500">{err}</p>}
+
+          {(isAssigned || onDelete) && (
+            <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "#fecaca", background: "#fff7f7" }}>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-red-500">Danger zone</p>
+              {isAssigned && (
+                <button type="button" onClick={askUnassign} disabled={saving}
+                  className="w-full py-2.5 rounded-xl text-sm font-bold border border-red-200 text-red-600 bg-white hover:bg-red-50 disabled:opacity-60">
+                  Unassign plot &amp; delete all its payments
+                </button>
+              )}
+              {onDelete && (
+                <button type="button" onClick={() => setConfirmDelete(true)} disabled={saving}
+                  className="w-full py-2.5 rounded-xl text-sm font-bold border border-red-200 text-red-600 bg-white hover:bg-red-50 disabled:opacity-60">
+                  Delete plot
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="px-6 py-4 border-t flex gap-2" style={{ borderColor: "var(--border)" }}>
+          <button onClick={onClose} className="flex-1 py-3 rounded-xl text-sm font-semibold border" style={{ borderColor: "var(--border)", color: "#64748b" }}>Cancel</button>
+          <button onClick={save} disabled={saving} className="flex-1 py-3 rounded-xl text-sm font-bold text-white disabled:opacity-60" style={{ background: "#1e2d4a" }}>
+            {saving ? "Saving…" : "Save Changes"}
+          </button>
+        </div>
+      </div>
+
+      {confirmUnassign && (
+        <ConfirmModal
+          title={`Unassign plot ${plot.plot_number}?`}
+          message={<>This <strong>permanently deletes all {confirmUnassign.count} payment record{confirmUnassign.count === 1 ? "" : "s"} ({fmtKESFull(confirmUnassign.amount)})</strong> for this plot, removes the owner and any co-owners, and makes the plot available for a new client. This cannot be undone.</>}
+          confirmLabel="Unassign & delete payments"
+          busy={saving}
+          onCancel={() => setConfirmUnassign(null)}
+          onConfirm={doUnassign}
+        />
+      )}
+      {confirmDelete && onDelete && (
+        <ConfirmModal
+          title={`Delete plot ${plot.plot_number}?`}
+          message="This permanently deletes the plot and all its payment records. This cannot be undone."
+          confirmLabel="Delete plot"
+          busy={saving}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={async () => { setSaving(true); try { await onDelete(); setConfirmDelete(false); onClose(); } catch (e: any) { setErr(e.message ?? "Could not delete."); } finally { setSaving(false); } }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Plot Card (used on the Projects page AND on member/client pages) ────────
+// Actions: Edit (details + assignment, Unassign, Delete) · Payments · Assign/Pay
+// · Co-Own, plus a Plot Documents window.
+export function PlotCard({
+  plot, projectName, isAdmin, canViewDocs = false, shareholders, clients, coOwners: coOwnersProp,
+  showLinks = false, highlight = false, cardRef, onChanged, onDelete,
+}: {
+  plot: Plot & { project?: Project };
+  projectName?: string;
+  isAdmin: boolean;
+  canViewDocs?: boolean;
+  shareholders?: DirMember[];
+  clients?: DirMember[];
+  coOwners?: PlotCoOwner[];
+  /** Link the plot number and project name (used outside the Projects page). */
+  showLinks?: boolean;
+  highlight?: boolean;
+  cardRef?: (el: HTMLDivElement | null) => void;
+  onChanged: () => void | Promise<void>;
+  onDelete?: () => Promise<void>;
+}) {
+  const dir = useDirectory(shareholders, clients);
+  const pName = projectName ?? (plot.project as any)?.project_name ?? "";
+  const projectId = (plot as any).project_id ?? (plot.project as any)?.id;
+  const price = Number(plot.price);
+  const paid = Number(plot.paid_amount);
+  const due = Math.max(0, price - paid);
+  const pct = price > 0 ? Math.min(100, Math.round((paid / price) * 100)) : 0;
+  const isAssigned = ["assigned", "sold"].includes(String(plot.status)) && !!plot.assigned_to_id;
+  const ownerType = plot.assigned_to_type;
+  const owner = ownerType === "client"
+    ? dir.clients.find((c) => c.id === plot.assigned_to_id)
+    : dir.shareholders.find((s) => s.id === plot.assigned_to_id);
+  const ownerName = owner?.name ?? (plot as any).shareholder?.name ?? (plot as any).client?.name ?? "—";
+  const ownerNo = owner ? (ownerType === "client" ? String(owner.member_number ?? "") : `EW#${owner.member_number}`) : "";
+
+  const [loadedCo, setLoadedCo] = useState<PlotCoOwner[]>([]);
+  const loadCo = useCallback(() => {
+    if (coOwnersProp) return;
+    plotCoOwnersApi.listByPlot(plot.id).then((d) => setLoadedCo(d as any)).catch(() => setLoadedCo([]));
+  }, [plot.id, coOwnersProp]);
+  useEffect(() => { loadCo(); }, [loadCo]);
+  const coOwners = coOwnersProp ?? loadedCo;
+  const coLabel = (co: PlotCoOwner) => {
+    const list = co.member_type === "client" ? dir.clients : dir.shareholders;
+    const m = list.find((x) => x.id === co.member_id) ?? (co as any).member;
+    const num = m?.member_number != null ? (co.member_type === "client" ? String(m.member_number) : `EW#${m.member_number}`) : `#${co.member_id}`;
+    return { num, name: m?.name ?? `Member #${co.member_id}`, type: co.member_type === "client" ? "Client" : "Shareholder" };
+  };
+
+  const [coOpen, setCoOpen] = useState(false);
+  const [paymentsOpen, setPaymentsOpen] = useState(false);
+  const [paymentsKey, setPaymentsKey] = useState(0);
+  const [editOpen, setEditOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [coOwnOpen, setCoOwnOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+
+  const changed = async () => { await onChanged(); loadCo(); setPaymentsKey((k) => k + 1); };
+
+  const typeBadge = (t: string | null | undefined) => (
+    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+      style={t === "client" ? { background: "#fef3c7", color: "#b45309" } : { background: "#eff6ff", color: "#2563eb" }}>
+      {t === "client" ? "Client" : "Shareholder"}
+    </span>
+  );
+  const actionBtn = "py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r last:border-r-0";
+
+  return (
+    <div ref={cardRef} className="rounded-xl border overflow-hidden transition-all duration-700"
+      style={{ borderColor: highlight ? "#6366f1" : "#000000", background: isAssigned ? "#fafafe" : "#fafafa", boxShadow: highlight ? "0 0 0 3px rgba(99,102,241,0.25)" : undefined }}>
+      <div className="p-3 space-y-1.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-sm truncate flex items-center gap-1 flex-wrap" style={{ color: "#1a202c" }}>
+              {showLinks
+                ? <PlotLink projectId={projectId} plotId={plot.id} className="text-indigo-600">Plot {plot.plot_number}</PlotLink>
+                : <span>{plot.plot_number}</span>}
+              {showLinks && pName && (
+                <>
+                  <span className="text-gray-300 font-normal">/</span>
+                  <ProjectLink projectId={projectId} className="text-green-600">{pName}</ProjectLink>
+                </>
+              )}
+            </p>
+            {showLinks && (plot.project as any)?.location && <p className="text-[10px] text-gray-400 uppercase">{(plot.project as any).location}</p>}
+            <p className="text-[#050505] text-[12px]">{plot.size ? `${plot.size} ac · ` : ""}{fmtKESFull(price)}</p>
+          </div>
+          <span className={`font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${isAssigned ? "bg-indigo-50 text-indigo-600" : "bg-green-500 text-black"} text-[11px]`}>
+            {isAssigned ? "Assigned" : "Available"}
+          </span>
+        </div>
+
+        {isAssigned && (
+          <>
+            {coOwners.length > 0 ? (
+              <button type="button" onClick={() => setCoOpen((o) => !o)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors"
+                style={{ background: "#eff6ff", color: "#2563eb" }}>
+                <Users size={11} /> Multiple ({coOwners.length + 1})
+                <ChevronDown size={11} className={`transition-transform ${coOpen ? "rotate-180" : ""}`} />
+              </button>
+            ) : (
+              <p className="font-medium text-[13px] flex items-center gap-1.5 flex-wrap" style={{ color: "#374151" }}>
+                <MemberLink type={ownerType} name={ownerName === "—" ? null : ownerName}>{ownerName}</MemberLink>
+                {typeBadge(ownerType)}
+              </p>
+            )}
+            {coOwners.length > 0 && coOpen && (
+              <div className="rounded-xl border overflow-hidden mt-1" style={{ borderColor: "#dbeafe" }}>
+                <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border-b" style={{ borderColor: "#dbeafe" }}>
+                  <span className="text-[10px] font-bold text-indigo-500 w-16 shrink-0">{ownerNo}</span>
+                  <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}><MemberLink type={ownerType} name={ownerName === "—" ? null : ownerName}>{ownerName}</MemberLink></span>
+                  {typeBadge(ownerType)}
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Primary</span>
+                </div>
+                {coOwners.map((co) => {
+                  const m = coLabel(co);
+                  return (
+                    <div key={co.id} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: "#dbeafe" }}>
+                      <span className="text-[10px] font-bold text-indigo-500 w-16 shrink-0">{m.num}</span>
+                      <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}><MemberLink type={co.member_type} name={m.name} /></span>
+                      {typeBadge(co.member_type)}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
+              {plot.min_monthly_payment != null && Number(plot.min_monthly_payment) > 0 && (
+                <span className="font-semibold text-indigo-600">Min/month: {fmtKESFull(Number(plot.min_monthly_payment))}</span>
+              )}
+              {plot.deadline && <span className="font-semibold text-orange-600">Due by day {Number(plot.deadline.split("-")[2] ?? 0)} monthly</span>}
+              <span className="font-semibold text-gray-500">{plot.payment_mode === "installment" ? "Instalments" : "Cash"}</span>
+            </div>
+            <div className="h-1 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>
+              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "#22c55e" }} />
+            </div>
+            <p className="text-[10px] text-[#0d0d0d] font-bold">
+              Paid: {fmtKESFull(paid)} · Due: {fmtKESFull(due)} · {pct}%
+            </p>
+          </>
+        )}
+      </div>
+
+      {isAdmin && (
+        <div className="grid grid-cols-4 border-t" style={{ borderColor: "#e2e8f0" }}>
+          <button type="button" onClick={() => setEditOpen(true)} className={actionBtn} style={{ borderColor: "#e2e8f0", color: "#64748b", background: "#f8fafc" }}>
+            <Edit2 size={11} /> Edit
+          </button>
+          <button type="button" onClick={() => setPaymentsOpen((o) => !o)} className={actionBtn}
+            style={{ borderColor: "#e2e8f0", color: paymentsOpen ? "#4338ca" : "#6366f1", background: paymentsOpen ? "#e0e7ff" : "#eef2ff" }}>
+            <List size={11} /> Payments
+          </button>
+          {isAssigned ? (
+            <button type="button" onClick={() => setPayOpen(true)} className={actionBtn} style={{ borderColor: "#e2e8f0", color: "#16a34a", background: "#f0fdf4" }}>
+              <Wallet size={11} /> Pay
+            </button>
+          ) : (
+            <button type="button" onClick={() => setAssignOpen(true)} className={actionBtn} style={{ borderColor: "#e2e8f0", color: "#4f46e5", background: "#eef2ff" }}>
+              <UserPlus size={11} /> Assign
+            </button>
+          )}
+          <button type="button" onClick={() => setCoOwnOpen(true)} className={actionBtn} style={{ borderColor: "#e2e8f0", color: "#2563eb", background: "#eff6ff" }}>
+            <Users size={11} /> Co-Own
+          </button>
+        </div>
+      )}
+
+      {paymentsOpen && (
+        <div className="border-t" style={{ borderColor: "#e2e8f0" }}>
+          <PlotPaymentsPanel key={paymentsKey} plot={plot} onPay={isAssigned && isAdmin ? () => setPayOpen(true) : undefined} onRefresh={onChanged} />
+        </div>
+      )}
+
+      {(isAdmin || canViewDocs) && (
+        <button type="button" onClick={() => setDocsOpen(true)}
+          className="w-full flex items-center gap-2 px-3 py-2 text-[10px] font-bold border-t hover:bg-gray-50 transition-colors"
+          style={{ color: "#6366f1", borderColor: "#e2e8f0" }}>
+          <FileText size={11} /> Plot Documents <Eye size={11} className="ml-auto" />
+        </button>
+      )}
+
+      {/* ── Modals ── */}
+      {docsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={(e) => { if (e.target === e.currentTarget) setDocsOpen(false); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: "var(--border)" }}>
+              <div>
+                <h2 className="font-bold text-sm" style={{ color: "#1a202c" }}>Plot Documents — {plot.plot_number}</h2>
+                {pName && <p className="text-xs text-gray-400">{pName}</p>}
+              </div>
+              <button onClick={() => setDocsOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={15} /></button>
+            </div>
+            <div className="p-5 overflow-y-auto">
+              <DocumentsSection entityType="plot" entityId={plot.id} isAdmin={isAdmin} />
+            </div>
+          </div>
+        </div>
+      )}
+      {editOpen && (
+        <EditPlotFullModal plot={plot} projectName={pName} shareholders={dir.shareholders} clients={dir.clients}
+          onClose={() => setEditOpen(false)} onSaved={changed} onDelete={onDelete} />
+      )}
+      {assignOpen && (
+        <AssignPlotModal plot={plot} projectName={pName} shareholders={dir.shareholders as any} clients={dir.clients as any}
+          onClose={() => setAssignOpen(false)}
+          onUnassign={async () => {}}
+          onSave={async (plotId, payload) => {
+            await plotsApi.assign(plotId, payload);
+            logActivity({ category: "plot", action: "update", description: `Plot ${plot.plot_number} assigned${pName ? ` in project "${pName}"` : ""}`, meta: { plot_id: plotId } });
+            const m = (payload.assigned_to_type === "client" ? dir.clients : dir.shareholders).find((x) => x.id === payload.assigned_to_id);
+            if (m?.phone) sendSms(m.phone, smsTemplates.plotAssigned(m.name, plot.plot_number, pName, `KES ${Number(payload.price ?? plot.price).toLocaleString()}`), SMS_TRIGGERS.plotAssigned).catch(() => {});
+            await changed();
+          }} />
+      )}
+      {payOpen && (
+        <PlotPaymentModal plot={plot} projectName={pName} assignedName={ownerName} memberPhone={owner?.phone} isAdmin={isAdmin}
+          onClose={() => setPayOpen(false)}
+          onSave={async (amount, method, ref, _viaStk, phone, extras) => {
+            await recordPlotPayment({ plot, projectName: pName, ownerName, ownerPhone: owner?.phone, amount, method, ref, phone, extras });
+            await changed();
+          }} />
+      )}
+      {coOwnOpen && (
+        <AddCoOwnerModal plot={plot} shareholders={dir.shareholders as any} clients={dir.clients as any}
+          existingCoOwners={coOwners} onClose={() => setCoOwnOpen(false)} onDone={changed} />
+      )}
     </div>
   );
 }
@@ -3554,224 +3861,26 @@ function ProjectDetailView({
                 <p className="text-xs text-gray-400">{isAdmin ? "No plots found." : "No available plots at this time."}</p>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {visiblePlots.map((p) => {
-                    const price = Number(p.price);
-                    const paid = Number(p.paid_amount);
-                    const pct = price > 0 ? Math.round((paid / price) * 100) : 0;
-                    const isAssigned = p.status === "assigned";
-                    const coOwners = coOwnersMap[p.id] ?? [];
-                    const isMulti = coOwners.length > 0;
-                    const coOpen = coOwnersOpen[p.id] ?? false;
-
-                    const coOwnerLabel = (co: PlotCoOwner) => {
-                      if (co.member_type === "shareholder") {
-                        const s = shareholders.find((x) => x.id === co.member_id);
-                        return s ? { num: `EW#${s.member_number}`, name: s.name, type: "Shareholder" } : { num: `#${co.member_id}`, name: "Unknown", type: "Shareholder" };
-                      }
-                      const c = clients.find((x) => x.id === co.member_id);
-                      return c ? { num: c.member_number ?? `#${co.member_id}`, name: c.name, type: "Client" } : { num: `#${co.member_id}`, name: "Unknown", type: "Client" };
-                    };
-
-                    return (
-                      <div key={p.id} ref={(el) => { plotCardRefs.current[p.id] = el; }}
-                        className="rounded-xl border overflow-hidden transition-all duration-700"
-                        style={{ borderColor: flashPlotId === p.id ? "#6366f1" : "#000000", background: isAssigned ? "#fafafe" : "#fafafa", boxShadow: flashPlotId === p.id ? "0 0 0 3px rgba(99,102,241,0.25)" : undefined }}>
-                        <div className="p-3 space-y-1.5">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <p className="font-bold text-sm truncate" style={{ color: "#1a202c" }}>{p.plot_number}</p>
-                              <p className="text-[#050505] text-[12px]">{p.size ? `${p.size} ac · ` : ""}{fmtKESFull(price)}</p>
-                            </div>
-                            <span className={`font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${isAssigned ? "bg-indigo-50 text-indigo-600" : "bg-green-500 text-black"} text-[11px]`}>
-                              {isAssigned ? "Assigned" : "Available"}
-                            </span>
-                          </div>
-                          {isAssigned && (
-                            <>
-                              {isMulti ? (
-                                <button
-                                  onClick={() => setCoOwnersOpen((o) => ({ ...o, [p.id]: !o[p.id] }))}
-                                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors"
-                                  style={{ background: "#eff6ff", color: "#2563eb" }}>
-                                  <Users size={11} />
-                                  Multiple ({coOwners.length + 1})
-                                  <ChevronDown size={11} className={`transition-transform ${coOpen ? "rotate-180" : ""}`} />
-                                </button>
-                              ) : (
-                                <p className="font-medium text-[13px] flex items-center gap-1.5 flex-wrap" style={{ color: "#374151" }}>
-                                  {assignedName(p)}
-                                  {p.assigned_to_type === "client" && (
-                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ background: "#fef3c7", color: "#b45309" }}>Client</span>
-                                  )}
-                                  {p.assigned_to_type === "shareholder" && (
-                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ background: "#eff6ff", color: "#2563eb" }}>Shareholder</span>
-                                  )}
-                                </p>
-                              )}
-                              {/* Co-owners panel */}
-                              {isMulti && coOpen && (
-                                <div className="rounded-xl border overflow-hidden mt-1" style={{ borderColor: "#dbeafe" }}>
-                                  {/* Primary owner */}
-                                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border-b" style={{ borderColor: "#dbeafe" }}>
-                                    <span className="text-[10px] font-bold text-indigo-500 w-16 shrink-0">
-                                      {p.assigned_to_type === "shareholder"
-                                        ? `EW#${shareholders.find((x) => x.id === p.assigned_to_id)?.member_number ?? p.assigned_to_id}`
-                                        : clients.find((x) => x.id === p.assigned_to_id)?.member_number ?? `#${p.assigned_to_id}`}
-                                    </span>
-                                    <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}><MemberLink type={p.assigned_to_type} name={assignedName(p).split(" (")[0]} /></span>
-                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                                      style={{ background: p.assigned_to_type === "shareholder" ? "#eff6ff" : "#fef3c7", color: p.assigned_to_type === "shareholder" ? "#2563eb" : "#d97706" }}>
-                                      {p.assigned_to_type === "shareholder" ? "Shareholder" : "Client"}
-                                    </span>
-                                  </div>
-                                  {/* Co-owners */}
-                                  {coOwners.map((co) => {
-                                    const m = coOwnerLabel(co);
-                                    return (
-                                      <div key={co.id} className="flex items-center gap-2 px-3 py-2 border-b last:border-b-0" style={{ borderColor: "#dbeafe" }}>
-                                        <span className="text-[10px] font-bold text-indigo-500 w-16 shrink-0">{m.num}</span>
-                                        <span className="text-xs font-semibold flex-1 truncate" style={{ color: "#1a202c" }}><MemberLink type={co.member_type} name={m.name} /></span>
-                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                                          style={{ background: co.member_type === "shareholder" ? "#eff6ff" : "#fef3c7", color: co.member_type === "shareholder" ? "#2563eb" : "#d97706" }}>
-                                          {m.type}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
-                                {p.min_monthly_payment != null && Number(p.min_monthly_payment) > 0 && (
-                                  <span className="font-semibold text-indigo-600">Min/month: {fmtKESFull(Number(p.min_monthly_payment))}</span>
-                                )}
-                                {p.deadline && (
-                                  <span className="font-semibold text-orange-600">Due by day {Number(p.deadline.split("-")[2] ?? 0)} monthly</span>
-                                )}
-                              </div>
-                              <div className="h-1 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>
-                                <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "#22c55e" }} />
-                              </div>
-                              <p className="text-[10px] text-[#0d0d0d] font-bold">
-                                Paid: {fmtKESFull(paid)} · Due: {fmtKESFull(Math.max(0, price - paid))} · {pct}%
-                              </p>
-                            </>
-                          )}
-                        </div>
-                        {/* Action buttons — admin only */}
-                        {isAdmin && (
-                          <div className="grid border-t" style={{ borderColor: "#e2e8f0", gridTemplateColumns: isAssigned ? `1fr 1fr 1fr 1fr 1fr 1fr` : "1fr 1fr 1fr 1fr 1fr" }}>
-                            <button onClick={() => setEditPlotTarget(p)}
-                              className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                              style={{ borderColor: "#e2e8f0", color: "#64748b", background: "#f8fafc" }}>
-                              <Edit2 size={11} /> Edit
-                            </button>
-                            <button onClick={() => toggleViewPayments(p.id)}
-                              className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                              style={{ borderColor: "#e2e8f0", color: viewPaymentsOpen[p.id] ? "#4338ca" : "#6366f1", background: viewPaymentsOpen[p.id] ? "#e0e7ff" : "#eef2ff" }}>
-                              <List size={11} /> Payments
-                            </button>
-                            {isAssigned ? (
-                              <>
-                                <button onClick={() => setPayTarget(p)}
-                                  className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                                  style={{ borderColor: "#e2e8f0", color: "#16a34a", background: "#f0fdf4" }}>
-                                  <Wallet size={11} /> Pay
-                                </button>
-                                <button onClick={() => setAddCoOwnerTarget(p)}
-                                  className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                                  style={{ borderColor: "#e2e8f0", color: "#2563eb", background: "#eff6ff" }}>
-                                  <Users size={11} /> Co-Own
-                                </button>
-                                <button onClick={() => setAssignTarget(p)}
-                                  className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                                  style={{ borderColor: "#e2e8f0", color: "#d97706", background: "#fffbeb" }}>
-                                  <Edit2 size={11} /> Edit Assignment
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button onClick={() => setAssignTarget(p)}
-                                  className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                                  style={{ borderColor: "#e2e8f0", color: "#4f46e5", background: "#eef2ff" }}>
-                                  <Users size={11} /> Assign
-                                </button>
-                                <button onClick={() => setAddCoOwnerTarget(p)}
-                                  className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold border-r"
-                                  style={{ borderColor: "#e2e8f0", color: "#2563eb", background: "#eff6ff" }}>
-                                  <Users size={11} /> Co-Own
-                                </button>
-                              </>
-                            )}
-                            <button onClick={() => setDeletePlotTarget(p)}
-                              className="py-2 flex items-center justify-center gap-1 text-[10px] font-bold"
-                              style={{ color: "#ef4444", background: "#fef2f2" }}>
-                              <Trash2 size={11} /> Delete
-                            </button>
-                          </div>
-                        )}
-
-                        {/* View Payments panel */}
-                        {viewPaymentsOpen[p.id] && (
-                          <div className="border-t" style={{ borderColor: "#e2e8f0" }}>
-                            {loadingPlotPayments[p.id] ? (
-                              <div className="flex justify-center py-3"><Loader2 size={13} className="animate-spin text-gray-300" /></div>
-                            ) : (plotPaymentsMap[p.id] ?? []).length === 0 ? (
-                              <p className="px-4 py-3 text-xs text-gray-400 italic">No payment records yet.</p>
-                            ) : (
-                              <>
-                                <div className="grid px-3 py-1.5 text-[10px] font-semibold text-white"
-                                  style={{ gridTemplateColumns: "1fr 1fr 1.5fr auto", background: "#1e3a5f" }}>
-                                  <span>Date</span><span>Amount</span><span>Notes</span><span />
-                                </div>
-                                {(plotPaymentsMap[p.id] ?? []).map((pay, pi) => {
-                                  let note = pay.notes || "—";
-                                  try { const parsed = JSON.parse(pay.notes ?? ""); if (parsed?.note) note = parsed.note; else if (parsed?.method) note = parsed.method; } catch { /* plain text */ }
-                                  return (
-                                    <div key={pay.id} className="grid px-3 py-2 items-center text-[10px] border-b last:border-b-0"
-                                      style={{ gridTemplateColumns: "1fr 1fr 1.5fr auto", background: pi % 2 === 0 ? "#f8fafc" : "#fff", borderColor: "#f1f5f9" }}>
-                                      <span className="text-gray-500">{fmtDateTime(pay.payment_date || pay.created_at)}</span>
-                                      <span className="font-bold text-green-600">{fmtKES(Number(pay.amount))}</span>
-                                      <span className="text-gray-400 truncate pr-1">{note}</span>
-                                      <div className="flex items-center gap-1">
-                                        {confirmDeletePlotPaymentId === pay.id ? (
-                                          <>
-                                            <button onClick={() => handleDeletePlotPayment(pay.id, p.id)} disabled={deletingPlotPaymentId === pay.id}
-                                              className="text-[9px] font-bold px-1.5 py-0.5 rounded text-white disabled:opacity-50" style={{ background: "#ef4444" }}>
-                                              {deletingPlotPaymentId === pay.id ? "…" : "Yes"}
-                                            </button>
-                                            <button onClick={() => setConfirmDeletePlotPaymentId(null)}
-                                              className="text-[9px] font-bold px-1.5 py-0.5 rounded border" style={{ borderColor: "#e2e8f0", color: "#64748b" }}>No</button>
-                                          </>
-                                        ) : (
-                                          <button onClick={() => setConfirmDeletePlotPaymentId(pay.id)}
-                                            className="p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors">
-                                            <Trash2 size={11} />
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                                <div className="px-3 py-1.5 flex justify-between text-[10px]" style={{ background: "#f0f4ff" }}>
-                                  <span className="text-gray-500">{(plotPaymentsMap[p.id] ?? []).length} record(s)</span>
-                                  <span className="font-bold" style={{ color: "#1e3a5f" }}>
-                                    Total: {fmtKES((plotPaymentsMap[p.id] ?? []).reduce((s, py) => s + Number(py.amount), 0))}
-                                  </span>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Plot documents (collapsible) */}
-                        <PlotDocumentsRow
-                          plotId={p.id}
-                          isAdmin={isAdmin}
-                          canView={isAdmin || (p.assigned_to_id === currentMemberId && p.assigned_to_type === currentMemberType)}
-                        />
-                      </div>
-                    );
-                  })}
+                  {visiblePlots.map((p) => (
+                    <PlotCard
+                      key={p.id}
+                      plot={p}
+                      projectName={project.project_name}
+                      isAdmin={isAdmin}
+                      canViewDocs={p.assigned_to_id === currentMemberId && p.assigned_to_type === currentMemberType}
+                      shareholders={shareholders as any}
+                      clients={clients as any}
+                      coOwners={coOwnersMap[p.id] ?? []}
+                      highlight={flashPlotId === p.id}
+                      cardRef={(el) => { plotCardRefs.current[p.id] = el; }}
+                      onChanged={load}
+                      onDelete={async () => {
+                        logActivity({ category: "plot", action: "delete", description: `Plot ${p.plot_number} deleted from project "${project.project_name}"`, meta: { plot_id: p.id } });
+                        await plotsApi.remove(p.id);
+                        await load();
+                      }}
+                    />
+                  ))}
                 </div>
               )}
             </div>

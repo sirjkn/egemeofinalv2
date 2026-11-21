@@ -1102,6 +1102,29 @@ export const plotsApi = {
     return data;
   },
 
+  /**
+   * Unassign a plot AND permanently delete all of its payment records and
+   * co-owners, leaving it clean for a new owner. Returns what was removed.
+   */
+  unassignAndClearPayments: async (plot_id: number): Promise<{ payments: number; amount: number }> => {
+    const { data: pmts, error: listErr } = await supabase.from("plot_payments").select("id,amount").eq("plot_id", plot_id);
+    if (listErr) throw new Error(listErr.message);
+    const amount = (pmts ?? []).reduce((s: number, r: any) => s + Number(r.amount), 0);
+    if ((pmts ?? []).length) {
+      const { error: delErr } = await supabase.from("plot_payments").delete().eq("plot_id", plot_id);
+      if (delErr) throw new Error(delErr.message);
+    }
+    await supabase.from("plot_co_owners").delete().eq("plot_id", plot_id);
+    const { error } = await supabase.from("plots").update({
+      status: "available", assigned_to_id: null, assigned_to_type: null,
+      payment_mode: null, loan_duration_months: null,
+      interest_type: null, interest_amount: null, min_monthly_payment: null,
+      deadline: null, paid_amount: 0,
+    }).eq("id", plot_id);
+    if (error) throw new Error(error.message);
+    return { payments: (pmts ?? []).length, amount };
+  },
+
   recordPayment: async (plot_id: number, amount: number, notes?: string, payment_date?: string): Promise<Plot> => {
     // Insert the payment record FIRST so the sum below includes it
     await supabase.from("plot_payments").insert({

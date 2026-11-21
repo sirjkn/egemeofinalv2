@@ -31,7 +31,7 @@ import { getCompanyDetails } from "@/lib/company";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase";
-import { ProjectsPage, AssignedPlotCard, PlotPaymentModal } from "@/app/pages/ProjectsPage";
+import { ProjectsPage, PlotCard, PlotPaymentModal } from "@/app/pages/ProjectsPage";
 import { LeadsPage } from "@/app/pages/LeadsPage";
 import { ReportsPage, type ArrearPayRequest } from "@/app/pages/ReportsPage";
 import { SettingsPage, LoginAsCard, getPaymentRules, type PaymentRules } from "@/app/pages/SettingsPage";
@@ -1554,14 +1554,7 @@ function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone
         ) : (
           <div className="space-y-3 pt-1">
             {plots.map((p) => (
-              <AssignedPlotCard key={p.id} plot={p} isAdmin={_isAdmin}
-                onPay={() => { setPayTarget(p); setPayStep("amount"); }}
-                onUpload={() => setUploadTarget(p)}
-                onRemove={() => plotsApi.unassign(p.id).then(reload)}
-                onRefresh={reload}
-                onNavigatePlot={() => navigate("/projects", { state: { projectId: (p.project as any)?.id, plotId: p.id } })}
-                onNavigateProject={() => navigate("/projects", { state: { projectId: (p.project as any)?.id } })}
-              />
+              <PlotCard key={p.id} plot={p} isAdmin={_isAdmin} canViewDocs showLinks onChanged={reload} />
             ))}
           </div>
         )}
