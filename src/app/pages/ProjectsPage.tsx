@@ -1500,12 +1500,36 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
   const [assignTo, setAssignTo] = useState<"shareholder" | "client">(plot.assigned_to_type ?? "shareholder");
   const [memberId, setMemberId] = useState<number | "">(plot.assigned_to_id ?? "");
   const [payMode, setPayMode] = useState<"cash" | "installment">(plot.payment_mode ?? "cash");
-  const [duration, setDuration] = useState<number | "">(plot.loan_duration_months ?? "");
+  // No saved duration (older plots): estimate it as price ÷ monthly minimum.
+  const [duration, setDuration] = useState<number | "">(() => {
+    if (plot.loan_duration_months) return plot.loan_duration_months;
+    const min = Number(plot.min_monthly_payment ?? 0), price = Number(plot.price ?? 0);
+    return isAssigned && min > 0 && price > 0 ? Math.max(1, Math.ceil(price / min)) : "";
+  });
   const [intType, setIntType] = useState<"fixed" | "percentage">(plot.interest_type ?? "fixed");
   const [intAmount, setIntAmount] = useState(plot.interest_amount != null ? String(plot.interest_amount) : "");
   const [minMonthly, setMinMonthly] = useState(plot.min_monthly_payment != null ? String(plot.min_monthly_payment) : "");
   const [deadlineDay, setDeadlineDay] = useState<number | "">(plot.deadline ? Number(plot.deadline.slice(8, 10)) : ""); // stays empty if never set
-  const [assignedAt, setAssignedAt] = useState(plot.assigned_at ?? "");
+  const [assignedAt, setAssignedAt] = useState(String(plot.assigned_at ?? "").slice(0, 10));
+  const termsEstimated = isAssigned && (!plot.assigned_at || !plot.loan_duration_months);
+  // No saved assigning date (older plots): use the earlier of the first payment
+  // date and the deadline — the same month the arrears schedule already assumes.
+  useEffect(() => {
+    if (!isAssigned || plot.assigned_at) return;
+    let alive = true;
+    const deadline = String(plot.deadline ?? "").slice(0, 10);
+    plotPaymentsApi.listByPlot(plot.id).then((rows: any[]) => {
+      const first = (rows ?? [])
+        .map((r) => String(r.payment_date ?? r.created_at ?? "").slice(0, 10))
+        .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+        .sort()[0];
+      const guess = [first, deadline].filter((d) => d && /^\d{4}-\d{2}-\d{2}$/.test(d)).sort()[0];
+      if (alive && guess) setAssignedAt((cur) => cur || (guess > todayKE() ? todayKE() : guess));
+    }).catch(() => {
+      if (alive && /^\d{4}-\d{2}-\d{2}$/.test(deadline)) setAssignedAt((cur) => cur || (deadline > todayKE() ? todayKE() : deadline));
+    });
+    return () => { alive = false; };
+  }, [plot.id]);
   const hasBalance = Number(plot.price) - Number(plot.paid_amount ?? 0) > 0;
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -1628,6 +1652,11 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
                 <input type="number" min={1} value={minMonthly} onChange={(e) => setMinMonthly(e.target.value)} placeholder="e.g. 10000" className={field} style={{ borderColor: "var(--border)" }} /></div>
               <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
                 deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} allowEmpty />
+              {termsEstimated && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Assigning date / duration weren't saved for this plot, so they've been filled in from its payments and minimum. Check them and Save Changes to keep them.
+                </p>
+              )}
             </>
           )}
           {err && <p className="text-xs text-red-500">{err}</p>}
