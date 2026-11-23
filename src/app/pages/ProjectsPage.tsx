@@ -236,15 +236,25 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
 }) {
   const field = "w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none";
   const expiry = assignedAt && duration ? addMonthsISO(assignedAt, Number(duration)) : "";
+  // The monthly deadline follows the assigning date's day until the user picks a
+  // different day. An existing deadline that already differs counts as picked.
+  const dayOf = (iso: string) => (iso ? Number(iso.slice(8, 10)) : "");
+  const [deadlineTouched, setDeadlineTouched] = useState(
+    () => deadlineDay !== "" && (!assignedAt || deadlineDay !== dayOf(assignedAt)),
+  );
+  const changeAssignedAt = (v: string) => {
+    setAssignedAt(v);
+    if (!deadlineTouched && v) setDeadlineDay(dayOf(v));
+  };
   return (
     <div className="grid grid-cols-2 gap-3">
       <div>
         <label className="text-xs font-semibold text-gray-600">Assigning Date</label>
-        <input type="date" value={assignedAt} max={todayKE()} onChange={(e) => setAssignedAt(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} />
+        <input type="date" value={assignedAt} max={todayKE()} onChange={(e) => changeAssignedAt(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} />
       </div>
       <div>
         <label className="text-xs font-semibold text-gray-600">Monthly Deadline</label>
-        <select value={deadlineDay} onChange={(e) => setDeadlineDay(e.target.value ? Number(e.target.value) : "")} className={field} style={{ borderColor: "var(--border)" }}>
+        <select value={deadlineDay} onChange={(e) => { setDeadlineTouched(true); setDeadlineDay(e.target.value ? Number(e.target.value) : ""); }} className={field} style={{ borderColor: "var(--border)" }}>
           {allowEmpty && <option value="">Not set</option>}
           {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{ordinalDay(d)} of every month</option>)}
         </select>
@@ -262,6 +272,7 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
       </div>
       <p className="col-span-2 text-xs text-gray-400 -mt-1">
         Repayments start the month after the assigning date and are due on this day every month.
+        {!deadlineTouched && " The deadline follows the assigning date's day unless you change it."}
         {typeof deadlineDay === "number" && deadlineDay > 28 && ` In shorter months the deadline moves to the month's last day (e.g. 28th Feb${deadlineDay === 31 ? ", 30th Apr" : ""}).`}
       </p>
     </div>
