@@ -197,6 +197,37 @@ export function computePlotArrears(
   return result;
 }
 
+/**
+ * Contract expiry (YYYY-MM-DD) = assigning date + payment duration in months,
+ * or "" when it can't be worked out. Older plots without a saved assigning date
+ * use the earlier of the first payment and the deadline; without a saved
+ * duration, price ÷ monthly minimum (rounded up). Same fallbacks as the Edit window.
+ */
+export function contractExpiry(plot: ArrearPlot, payments: ArrearPayment[]): string {
+  const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  let start = String(plot.assigned_at ?? "").slice(0, 10);
+  if (!isDate(start)) {
+    const candidates = payments
+      .filter((p) => Number(p.plot_id) === Number(plot.id))
+      .map((p) => String(p.payment_date ?? p.created_at ?? "").slice(0, 10))
+      .concat(String(plot.deadline ?? "").slice(0, 10))
+      .filter(isDate)
+      .sort();
+    start = candidates[0] ?? "";
+  }
+  if (!start) return "";
+  let months = Number(plot.loan_duration_months ?? 0);
+  if (!(months > 0)) {
+    const min = Number(plot.min_monthly_payment ?? 0), price = Number(plot.price ?? 0);
+    months = min > 0 && price > 0 ? Math.ceil(price / min) : 0;
+  }
+  if (!(months > 0)) return "";
+  const [y, m, d] = start.split("-").map(Number);
+  const t = new Date(y, m - 1 + months, 1);
+  const day = Math.min(d, new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate());
+  return ymd(t.getFullYear(), t.getMonth(), day);
+}
+
 /** Sum of what is still owed on unpaid arrears. */
 export function unpaidArrearsTotal(arrears: Arrear[]): number {
   return arrears.filter((a) => a.status === "unpaid").reduce((s, a) => s + a.remaining, 0);

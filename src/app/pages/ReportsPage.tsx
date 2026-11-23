@@ -16,7 +16,7 @@ import {
 } from "@/lib/pdf";
 import { fmtKES, fmtKESFull, fmtDate, MONTHS, CY, YEAR_OPTS } from "@/app/shared";
 import { getCompanyDetails, type CompanyDetails } from "@/lib/company";
-import { computePlotArrears, todayEAT } from "@/lib/arrears";
+import { computePlotArrears, contractExpiry, todayEAT } from "@/lib/arrears";
 import { MemberLink, ProjectLink, PlotLink } from "@/app/components/EntityLinks";
 import { sendSms, smsTemplates, SMS_TRIGGERS } from "@/lib/sms";
 import { downloadExcel, downloadExcelWorkbook } from "@/lib/excel";
@@ -152,6 +152,10 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   // unpaid = everything not yet paid (arrears + due today + upcoming)
   type ArrearStatusFilter = "unpaid" | "arrears" | "due-today" | "upcoming" | "paid" | "";
   const [arrearStatusF, setArrearStatusF] = useState<ArrearStatusFilter>("unpaid");
+  // Contract expiry filter and row sorting (applied in memory, no reload).
+  const [contractF, setContractF] = useState<"" | "active" | "expired">("");
+  type ArrearSort = "" | "project-asc" | "project-desc" | "expiry-asc" | "expiry-desc" | "deadline-asc" | "deadline-desc";
+  const [arrearSort, setArrearSort] = useState<ArrearSort>("");
   // Picking a To date of today or later also lists repayments due up to that date
   // which are not yet paid (members who have not defaulted yet), marked "Upcoming".
   // Upcoming window ends at the To date, or — when only From is set — at the From date,
@@ -269,8 +273,10 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             ? clientMap[Number(plot.assigned_to_id)] ?? null
             : shareholderMap[Number(plot.assigned_to_id)] ?? null;
           const project = projectMap[Number(plot.project_id)] ?? null;
+          const expiry = contractExpiry(plot, paymentRows);
           return computePlotArrears(plot, paymentRows, today, { includeUpcomingUntil: upcomingUntil }).map((a) => ({
             ...a,
+            expiry,
             key: `${a.plotId}-${a.period}`,
             plot,
             shareholder: member,
@@ -508,7 +514,8 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
   }, [type, load]);
 
   // ── search filter applied in-memory for member lists ────────────────────
-  const filtered = (type === "contributions" || type === "contributionsList" || type === "payments" || type === "refunds" || type === "profits" || type === "debtors")
+  const todayStr = todayEAT();
+  const searched = (type === "contributions" || type === "contributionsList" || type === "payments" || type === "refunds" || type === "profits" || type === "debtors")
     ? rows.filter((r) => {
         if (!search) return true;
         const q = search.toLowerCase();
@@ -527,6 +534,22 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         return true;
       })
     : rows;
+  const filtered = type !== "debtors" ? searched : (() => {
+    const out = searched.filter((r: any) =>
+      !contractF || (contractF === "expired" ? !!r.expiry && r.expiry < todayStr : !r.expiry || r.expiry >= todayStr));
+    if (!arrearSort) return out;
+    const [key, dir] = arrearSort.split("-") as ["project" | "expiry" | "deadline", "asc" | "desc"];
+    const sign = dir === "asc" ? 1 : -1;
+    const val = (r: any) => key === "project" ? String(r.project?.project_name ?? "") : key === "expiry" ? String(r.expiry ?? "") : String(r.dueDate ?? "");
+    return [...out].sort((a: any, b: any) => {
+      const va = val(a), vb = val(b);
+      if (!va !== !vb) return va ? -1 : 1; // blanks always last
+      return sign * va.localeCompare(vb, undefined, { numeric: true, sensitivity: "base" })
+        || String(a.dueDate).localeCompare(String(b.dueDate))
+        || String(a.plotNumber).localeCompare(String(b.plotNumber), undefined, { numeric: true });
+    });
+  })();
+  const contractText = (r: any) => r.expiry ? `${fmtDate(r.expiry)}${r.expiry < todayStr ? " (Expired)" : ""}` : "—";
 
   // ── PDF download ─────────────────────────────────────────────────────────
   const handlePdf = async () => {
@@ -550,15 +573,16 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         plotF && `Plot: ${plotOptions.find((p) => String(p.id) === plotF)?.plot_number ?? plotF}`,
         type === "debtors" && `Status: ${({ unpaid: "All not paid", arrears: "In arrears", "due-today": "Due today", upcoming: "Upcoming", paid: "Paid", "": "All" } as Record<string, string>)[arrearStatusF]}`,
         type === "debtors" && includeUpcoming && "Including upcoming repayments",
+        type === "debtors" && contractF && `Contract: ${contractF === "expired" ? "Expired" : "Not expired"}`,
       ].filter(Boolean).join(" · ") || "All records";
 
       if (type === "debtors") {
         downloadReportPdf([{
           title: "Plot Arrears",
-          headers: ["Member", "Member No.", "Phone", "Month", "Project", "Plot Number", "Monthly Repayment", "Outstanding", "Paid Status"],
+          headers: ["Member", "Member No.", "Phone", "Month", "Due Date", "Project", "Plot Number", "Contract Expiry", "Monthly Repayment", "Outstanding", "Paid Status"],
           rows: filtered.map((row: any) => [
             row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
-            row.shareholder?.phone ?? "—", row.monthLabel, row.project?.project_name ?? "—", row.plotNumber,
+            row.shareholder?.phone ?? "—", row.monthLabel, fmtDate(row.dueDate), row.project?.project_name ?? "—", row.plotNumber, contractText(row),
             Number(row.amount).toLocaleString("en-KE"), Number(row.remaining).toLocaleString("en-KE"),
             arrearStatusText(row),
           ]),
@@ -666,10 +690,10 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
     const stamp = new Date().toISOString().slice(0, 10);
     if (type === "debtors") {
       downloadExcel(`arrears-report-${stamp}`, "Arrears",
-        ["Member", "Member No.", "Phone", "Month", "Due Date", "Project", "Plot Number", "Monthly Repayment", "Outstanding", "Paid Status"],
+        ["Member", "Member No.", "Phone", "Month", "Due Date", "Project", "Plot Number", "Contract Expiry", "Monthly Repayment", "Outstanding", "Paid Status"],
         filtered.map((row: any) => [
           row.shareholder?.name ?? "—", row.memberType === "client" ? String(row.shareholder?.member_number ?? "—") : `EW#${row.shareholder?.member_number ?? "—"}`,
-          row.shareholder?.phone ?? "—", row.monthLabel, fmtDate(row.dueDate), row.project?.project_name ?? "—", row.plotNumber,
+          row.shareholder?.phone ?? "—", row.monthLabel, fmtDate(row.dueDate), row.project?.project_name ?? "—", row.plotNumber, contractText(row),
           Number(row.amount), Number(row.remaining), arrearStatusText(row),
         ]));
     } else if (type === "contributionsList") {
@@ -871,6 +895,22 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             <option value="">{projectF ? "All Plots" : "Select project first"}</option>
             {plotOptions.filter((plot) => String(plot.project_id) === projectF).map((plot) => <option key={plot.id} value={String(plot.id)}>{plot.plot_number}</option>)}
           </select>
+          <select value={contractF} onChange={(e) => setContractF(e.target.value as "" | "active" | "expired")}
+            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white" style={{ borderColor: contractF === "expired" ? "#dc2626" : "var(--border)", color: contractF === "expired" ? "#dc2626" : undefined }}>
+            <option value="">All Contracts</option>
+            <option value="active">Not expired</option>
+            <option value="expired">Expired</option>
+          </select>
+          <select value={arrearSort} onChange={(e) => setArrearSort(e.target.value as ArrearSort)}
+            className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white" style={{ borderColor: "var(--border)" }}>
+            <option value="">Sort: Month (default)</option>
+            <option value="project-asc">Project ascending (P1 → P6)</option>
+            <option value="project-desc">Project descending (P6 → P1)</option>
+            <option value="expiry-asc">Expiry date ascending</option>
+            <option value="expiry-desc">Expiry date descending</option>
+            <option value="deadline-asc">Deadline date ascending</option>
+            <option value="deadline-desc">Deadline date descending</option>
+          </select>
         </>
       )}
     </div>
@@ -905,9 +945,9 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
             ))}
           </div>
           <div className="overflow-x-auto flex-1">
-            <table className="w-full text-sm min-w-[980px]">
+            <table className="w-full text-sm min-w-[1080px]">
               <thead style={{ background: "#1e3a5f" }}>
-                <tr>{["Member", "No.", "Month", "Project", "Plot Number", "Monthly Repayment", "Paid Status", "Action"].map((heading) => (
+                <tr>{["Member", "No.", "Month", "Project", "Plot Number", "Contract Expiry", "Monthly Repayment", "Paid Status", "Action"].map((heading) => (
                   <th key={heading} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-white">{heading}</th>
                 ))}</tr>
               </thead>
@@ -933,6 +973,14 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
                     </td>
                     <td className="px-3 py-2 text-xs font-bold text-blue-700">
                       <button type="button" onClick={() => openProject(row, true)} title="Open plot" className={`font-bold text-blue-700 ${linkCls}`}>{row.plotNumber}</button>
+                    </td>
+                    <td className="px-3 py-2">
+                      {row.expiry ? (
+                        <>
+                          <p className={`text-xs font-semibold ${row.expiry < todayStr ? "text-red-600" : "text-slate-700"}`}>{fmtDate(row.expiry)}</p>
+                          {row.expiry < todayStr && <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">Expired</span>}
+                        </>
+                      ) : <span className="text-xs text-slate-400">—</span>}
                     </td>
                     <td className="px-3 py-2">
                       <p className="text-xs font-bold text-slate-800">{fmtKESFull(Number(row.amount))}</p>
@@ -985,13 +1033,13 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
               {filtered.length > 0 && (
                 <tfoot>
                   <tr className="border-t-2" style={{ background: "#fef2f2", borderColor: "#fecaca" }}>
-                    <td colSpan={5} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Total Unpaid</td>
+                    <td colSpan={6} className="px-3 py-2 text-xs font-extrabold uppercase text-red-700">Total Unpaid</td>
                     <td className="px-3 py-2 text-xs font-extrabold text-red-700">{fmtKESFull(totalOutstanding)}</td>
                     <td colSpan={2} />
                   </tr>
                   {includeUpcoming && upcomingRows.length > 0 && (
                     <tr style={{ background: "#fffbeb" }}>
-                      <td colSpan={5} className="px-3 py-2 text-xs font-extrabold uppercase text-amber-700">Upcoming (not yet due)</td>
+                      <td colSpan={6} className="px-3 py-2 text-xs font-extrabold uppercase text-amber-700">Upcoming (not yet due)</td>
                       <td className="px-3 py-2 text-xs font-extrabold text-amber-700">{fmtKESFull(upcomingTotal)}</td>
                       <td colSpan={2} />
                     </tr>
