@@ -7,8 +7,8 @@
 // Paying extra in an earlier month does NOT cover a later month.
 //
 // First month: the month AFTER the plot was allocated. The plots table has no
-// allocation date, so the allocation month is the earlier of the deadline's
-// month and the month of the first recorded payment.
+// allocation date unless `assigned_at` is recorded; without it, the allocation
+// month is the earlier of the deadline's month and the first payment's month.
 //
 // A month whose deadline has passed without the minimum is an ARREAR. Later
 // payments clear outstanding arrears first (oldest first); whatever is left
@@ -23,6 +23,8 @@ export interface ArrearPlot {
   min_monthly_payment?: number | string | null;
   loan_duration_months?: number | string | null;
   deadline?: string | null;
+  /** Date the plot was assigned, when recorded. */
+  assigned_at?: string | null;
 }
 
 export interface ArrearPayment {
@@ -112,9 +114,13 @@ export function computePlotArrears(
     pmts.sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  // Allocation month = earlier of the deadline's month and the first payment's month.
+  // Allocation month = the recorded assigning date; otherwise the earlier of the
+  // deadline's month and the first payment's month.
+  const assignedAt = String(plot.assigned_at ?? "").slice(0, 10);
   const firstPaymentMonth = pmts[0]?.date.slice(0, 7);
-  const allocMonth = firstPaymentMonth && firstPaymentMonth < anchor.slice(0, 7) ? firstPaymentMonth : anchor.slice(0, 7);
+  const allocMonth = /^\d{4}-\d{2}-\d{2}$/.test(assignedAt)
+    ? assignedAt.slice(0, 7)
+    : firstPaymentMonth && firstPaymentMonth < anchor.slice(0, 7) ? firstPaymentMonth : anchor.slice(0, 7);
   const [ay, am] = allocMonth.split("-").map(Number);
 
   const until = options.includeUpcomingUntil;

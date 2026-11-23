@@ -130,8 +130,10 @@ async function runPlotReminders(supabase: any, settings: any, atCfg: any, eatNow
       continue;
     }
 
-    let dueMs = Date.UTC(eatYear, eatMonth, deadlineDay);
-    if (todayMs > dueMs) dueMs = Date.UTC(eatYear, eatMonth + 1, deadlineDay);
+    // A 29th–31st deadline falls on the last day of shorter months (e.g. 28 Feb).
+    const dueIn = (y: number, m: number) => Date.UTC(y, m, Math.min(deadlineDay, new Date(Date.UTC(y, m + 1, 0)).getUTCDate()));
+    let dueMs = dueIn(eatYear, eatMonth);
+    if (todayMs > dueMs) dueMs = dueIn(eatYear, eatMonth + 1);
     const daysLeft = Math.round((dueMs - todayMs) / DAY_MS);
     if (!thresholds.has(daysLeft)) {
       skipped++;
@@ -188,7 +190,7 @@ async function runPlotReminders(supabase: any, settings: any, atCfg: any, eatNow
     const message = interpolate(template, {
       name: member.name.split(" ")[0],
       plotNumber: plot.plot_number ?? String(plot.id),
-      deadlineDay: ordinal(deadlineDay),
+      deadlineDay: ordinal(new Date(dueMs).getUTCDate()),
       days: String(daysLeft),
     });
 

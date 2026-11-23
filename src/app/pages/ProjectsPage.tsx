@@ -196,6 +196,78 @@ function AddCoOwnerModal({ plot, shareholders, clients, existingCoOwners, onClos
   );
 }
 
+// ─── Plot terms: assigning date, monthly deadline, duration, contract expiry ──
+const daysIn = (y: number, m0: number) => new Date(y, m0 + 1, 0).getDate();
+export const ordinalDay = (n: number) => {
+  const v = n % 100;
+  return `${n}${v >= 11 && v <= 13 ? "th" : n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th"}`;
+};
+/** Today in Kenya time, YYYY-MM-DD. */
+const todayKE = () => new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+/**
+ * The plots table stores the deadline as a date; only its DAY is used (every month).
+ * Store it in the first month, from the assigning date on, that has that day —
+ * so a 30th/31st deadline is never silently turned into the 28th.
+ */
+function deadlineDateFor(day: number, fromDate: string): string {
+  const [y0, m0] = (fromDate || todayKE()).split("-").map(Number);
+  for (let k = 0; k < 12; k++) {
+    const d = new Date(y0, m0 - 1 + k, 1);
+    if (day <= daysIn(d.getFullYear(), d.getMonth())) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+  return fromDate;
+}
+/** Add whole months to a YYYY-MM-DD date (clamped to the month's last day). */
+export function addMonthsISO(date: string, months: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const t = new Date(y, m - 1 + months, 1);
+  const day = Math.min(d, daysIn(t.getFullYear(), t.getMonth()));
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+const fmtDMY = (iso: string) => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "";
+
+function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDay, duration, setDuration, allowEmpty = false }: {
+  assignedAt: string; setAssignedAt: (v: string) => void;
+  deadlineDay: number | ""; setDeadlineDay: (v: number | "") => void;
+  duration: number | ""; setDuration: (v: number | "") => void;
+  allowEmpty?: boolean;
+}) {
+  const field = "w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none";
+  const expiry = assignedAt && duration ? addMonthsISO(assignedAt, Number(duration)) : "";
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <label className="text-xs font-semibold text-gray-600">Assigning Date</label>
+        <input type="date" value={assignedAt} max={todayKE()} onChange={(e) => setAssignedAt(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} />
+      </div>
+      <div>
+        <label className="text-xs font-semibold text-gray-600">Monthly Deadline</label>
+        <select value={deadlineDay} onChange={(e) => setDeadlineDay(e.target.value ? Number(e.target.value) : "")} className={field} style={{ borderColor: "var(--border)" }}>
+          {allowEmpty && <option value="">Not set</option>}
+          {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{ordinalDay(d)} of every month</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="text-xs font-semibold text-gray-600">Payment Duration (months)</label>
+        <input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value ? Math.max(1, parseInt(e.target.value) || 1) : "")}
+          placeholder="e.g. 12" className={field} style={{ borderColor: "var(--border)" }} />
+      </div>
+      <div>
+        <label className="text-xs font-semibold text-gray-600">Contract Expiry</label>
+        <div className={`${field} bg-gray-50 text-gray-700`} style={{ borderColor: "var(--border)" }} title="Assigning Date + Payment Duration">
+          {expiry ? fmtDMY(expiry) : <span className="text-gray-400">—</span>}
+        </div>
+      </div>
+      <p className="col-span-2 text-xs text-gray-400 -mt-1">
+        Repayments start the month after the assigning date and are due on this day every month.
+        {typeof deadlineDay === "number" && deadlineDay > 28 && ` In shorter months the deadline moves to the month's last day (e.g. 28th Feb${deadlineDay === 31 ? ", 30th Apr" : ""}).`}
+      </p>
+    </div>
+  );
+}
+
 function AssignPlotModal({
   plot, projectName, shareholders, clients, onClose, onSave, onUnassign,
 }: {
@@ -208,19 +280,22 @@ function AssignPlotModal({
   const [assignTo, setAssignTo] = useState<"shareholder" | "client">(plot.assigned_to_type ?? "shareholder");
   const [memberId, setMemberId] = useState<number | "">(plot.assigned_to_id ?? "");
   const [payMode, setPayMode] = useState<"cash" | "installment">(plot.payment_mode ?? "cash");
-  const [duration, setDuration] = useState(plot.loan_duration_months ?? 12);
+  const [duration, setDuration] = useState<number | "">(plot.loan_duration_months ?? 12);
   const [intType, setIntType] = useState<"fixed" | "percentage">(plot.interest_type ?? "fixed");
   const [intAmount, setIntAmount] = useState(plot.interest_amount != null ? String(plot.interest_amount) : "");
   const [minMonthlyPayment, setMinMonthlyPayment] = useState(plot.min_monthly_payment != null ? String(plot.min_monthly_payment) : "");
   const [plotPrice, setPlotPrice] = useState(String(plot.price ?? 0));
   const todayStr = new Date().toISOString().split("T")[0];
-  const [deadline, setDeadline] = useState(plot.deadline ?? todayStr);
+  const [assignedAt, setAssignedAt] = useState(plot.assigned_at ?? todayKE());
+  const [deadlineDay, setDeadlineDay] = useState<number | "">(plot.deadline ? Number(plot.deadline.slice(8, 10)) : Number(todayKE().slice(8, 10)));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const list = assignTo === "shareholder" ? shareholders : clients;
 
   const submit = async () => {
     if (!memberId) { setErr("Please select a member."); return; }
+    if (!duration) { setErr("Enter the payment duration in months."); return; }
+    if (!deadlineDay) { setErr("Choose the monthly deadline."); return; }
     const minimum = parseFloat(minMonthlyPayment);
     if (!Number.isFinite(minimum) || minimum <= 0) { setErr("Minimum payment per month must be greater than zero."); return; }
     const price = parseFloat(plotPrice);
@@ -231,11 +306,12 @@ function AssignPlotModal({
         assigned_to_id: memberId as number,
         assigned_to_type: assignTo,
         payment_mode: payMode,
-        loan_duration_months: payMode === "installment" ? duration : undefined,
+        loan_duration_months: Number(duration),
         interest_type: payMode === "installment" ? intType : undefined,
         interest_amount: payMode === "installment" && intAmount ? parseFloat(intAmount) : undefined,
         min_monthly_payment: minimum,
-        deadline: deadline || todayStr,
+        deadline: deadlineDateFor(Number(deadlineDay), assignedAt || todayKE()),
+        assigned_at: assignedAt || todayKE(),
         price,
       });
       onClose();
@@ -307,12 +383,6 @@ function AssignPlotModal({
           {payMode === "installment" && (
             <>
               <div>
-                <label className="text-xs font-semibold text-gray-600">Loan Duration (months)</label>
-                <input type="number" value={duration} onChange={(e) => setDuration(parseInt(e.target.value) || 12)} min={1}
-                  className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-                  style={{ borderColor: "var(--border)" }} />
-              </div>
-              <div>
                 <p className="text-xs font-semibold text-gray-600 mb-2">Interest Type</p>
                 <div className="grid grid-cols-2 gap-2">
                   {(["fixed", "percentage"] as const).map((t) => (
@@ -343,13 +413,8 @@ function AssignPlotModal({
               style={{ borderColor: "var(--border)" }} />
             <p className="text-xs text-gray-400 mt-0.5">The member must pay this amount or more before the monthly deadline.</p>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-600">Payment Deadline</label>
-            <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)}
-              className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-              style={{ borderColor: "var(--border)" }} />
-            <p className="text-xs text-gray-400 mt-0.5">Defaults to today. Reminders will be sent before this date.</p>
-          </div>
+          <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
+            deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} />
           {err && <p className="text-xs text-red-500">{err}</p>}
         </div>
         <div className="px-6 py-4 border-t flex gap-2" style={{ borderColor: "var(--border)" }}>
@@ -1424,11 +1489,12 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
   const [assignTo, setAssignTo] = useState<"shareholder" | "client">(plot.assigned_to_type ?? "shareholder");
   const [memberId, setMemberId] = useState<number | "">(plot.assigned_to_id ?? "");
   const [payMode, setPayMode] = useState<"cash" | "installment">(plot.payment_mode ?? "cash");
-  const [duration, setDuration] = useState(plot.loan_duration_months ?? 12);
+  const [duration, setDuration] = useState<number | "">(plot.loan_duration_months ?? "");
   const [intType, setIntType] = useState<"fixed" | "percentage">(plot.interest_type ?? "fixed");
   const [intAmount, setIntAmount] = useState(plot.interest_amount != null ? String(plot.interest_amount) : "");
   const [minMonthly, setMinMonthly] = useState(plot.min_monthly_payment != null ? String(plot.min_monthly_payment) : "");
-  const [deadline, setDeadline] = useState(plot.deadline ?? ""); // stays empty if never set
+  const [deadlineDay, setDeadlineDay] = useState<number | "">(plot.deadline ? Number(plot.deadline.slice(8, 10)) : ""); // stays empty if never set
+  const [assignedAt, setAssignedAt] = useState(plot.assigned_at ?? "");
   const hasBalance = Number(plot.price) - Number(plot.paid_amount ?? 0) > 0;
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -1453,11 +1519,12 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
       if (isAssigned) {
         await plotsApi.assign(plot.id, {
           assigned_to_id: memberId as number, assigned_to_type: assignTo, payment_mode: payMode,
-          loan_duration_months: payMode === "installment" ? duration : undefined,
+          loan_duration_months: duration ? Number(duration) : undefined,
           interest_type: payMode === "installment" ? intType : undefined,
           interest_amount: payMode === "installment" && intAmount ? parseFloat(intAmount) : undefined,
           min_monthly_payment: Number.isFinite(minimum) && minimum > 0 ? minimum : undefined,
-          deadline: deadline || undefined, price,
+          deadline: deadlineDay ? deadlineDateFor(Number(deadlineDay), assignedAt || plot.deadline || todayKE()) : undefined,
+          assigned_at: assignedAt || undefined, price,
         });
         // New owner? Send the plot-assigned SMS.
         if (memberId !== plot.assigned_to_id || assignTo !== plot.assigned_to_type) {
@@ -1537,8 +1604,6 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
               </div>
               {payMode === "installment" && (
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2"><label className="text-xs font-semibold text-gray-600">Loan Duration (months)</label>
-                    <input type="number" min={1} value={duration} onChange={(e) => setDuration(parseInt(e.target.value) || 12)} className={field} style={{ borderColor: "var(--border)" }} /></div>
                   {(["fixed", "percentage"] as const).map((t) => (
                     <button key={t} type="button" onClick={() => setIntType(t)} className="py-2 rounded-xl text-xs font-semibold border-2 transition-all" style={pick(intType === t)}>
                       {t === "fixed" ? "Fixed Amount (KES)" : "Percentage (%)"}
@@ -1550,9 +1615,8 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
               )}
               <div><label className="text-xs font-semibold text-gray-600">Minimum Payment Per Month (KES) {hasBalance && <span className="text-red-500">*</span>}</label>
                 <input type="number" min={1} value={minMonthly} onChange={(e) => setMinMonthly(e.target.value)} placeholder="e.g. 10000" className={field} style={{ borderColor: "var(--border)" }} /></div>
-              <div><label className="text-xs font-semibold text-gray-600">Payment Deadline</label>
-                <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} />
-                <p className="text-xs text-gray-400 mt-0.5">The day of this date is the monthly deadline.{!plot.deadline && " Leave empty if none."}</p></div>
+              <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
+                deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} allowEmpty />
             </>
           )}
           {err && <p className="text-xs text-red-500">{err}</p>}
@@ -1740,8 +1804,11 @@ export function PlotCard({
               {plot.min_monthly_payment != null && Number(plot.min_monthly_payment) > 0 && (
                 <span className="font-semibold text-indigo-600">Min/month: {fmtKESFull(Number(plot.min_monthly_payment))}</span>
               )}
-              {plot.deadline && <span className="font-semibold text-orange-600">Due by day {Number(plot.deadline.split("-")[2] ?? 0)} monthly</span>}
-              <span className="font-semibold text-gray-500">{plot.payment_mode === "installment" ? "Instalments" : "Cash"}</span>
+              {plot.deadline && <span className="font-semibold text-orange-600">Due {ordinalDay(Number(plot.deadline.split("-")[2] ?? 0))} monthly</span>}
+              <span className="font-semibold text-gray-500">{plot.payment_mode === "installment" ? "Instalments" : "Cash"}{plot.loan_duration_months ? ` · ${plot.loan_duration_months} months` : ""}</span>
+              {plot.assigned_at && plot.loan_duration_months ? (
+                <span className="font-semibold text-gray-500">Expires {fmtDMY(addMonthsISO(String(plot.assigned_at).slice(0, 10), Number(plot.loan_duration_months)))}</span>
+              ) : null}
             </div>
             <div className="h-1 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>
               <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "#22c55e" }} />

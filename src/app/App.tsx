@@ -2762,7 +2762,7 @@ function AdminDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
     (async () => {
       try {
         const { data: plots, error } = await supabase.from("plots")
-          .select("id,plot_number,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status")
+          .select("*")
           .not("assigned_to_id", "is", null).in("status", ["assigned", "sold"]);
         if (error) throw error;
         const plotIds = (plots ?? []).map((pl: any) => Number(pl.id));
@@ -4028,7 +4028,7 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
       const now = new Date(); const { month, year } = getBillingPeriod(now);
       const [mRes, plotRes, payRes] = await Promise.all([
         supabase.from(mtype + "s").select(isSH ? "name, member_number, net_savings, photo_url" : "name, member_number, photo_url").eq("id", mid).maybeSingle(),
-        supabase.from("plots").select("id, plot_number, price, paid_amount, status, min_monthly_payment, loan_duration_months, deadline, project:projects(project_name)").eq("assigned_to_id", mid).eq("assigned_to_type", mtype),
+        supabase.from("plots").select("*, project:projects(project_name)").eq("assigned_to_id", mid).eq("assigned_to_type", mtype),
         supabase.from("payments").select("id, amount, purpose, created_at, status").eq("member_id", mid).eq("member_type", mtype).order("created_at", { ascending: false }).limit(20),
       ]);
       if (mRes.data) setMemberInfo(mRes.data as any);
@@ -5299,7 +5299,7 @@ function useMemberArrears() {
     try {
       const [{ data: plots }, { data: m }] = await Promise.all([
         supabase.from("plots")
-          .select("id,plot_number,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status,project:projects(project_name)")
+          .select("*, project:projects(project_name)")
           .eq("assigned_to_id", memberId).eq("assigned_to_type", memberType),
         supabase.from(`${memberType}s`).select("name,phone").eq("id", memberId).maybeSingle(),
       ]);
@@ -9161,9 +9161,12 @@ export default function App() {
           // Build this month's due date (EAT-aware)
           const eatYear  = todayEAT.getUTCFullYear();
           const eatMonth = todayEAT.getUTCMonth(); // 0-indexed
-          let dueMs = Date.UTC(eatYear, eatMonth, deadlineDay);
+          // A 29th–31st deadline falls on the last day of shorter months (e.g. 28 Feb),
+          // never rolling over into the next month.
+          const dueIn = (y: number, m: number) => Date.UTC(y, m, Math.min(deadlineDay, new Date(Date.UTC(y, m + 1, 0)).getUTCDate()));
+          let dueMs = dueIn(eatYear, eatMonth);
           // If already past this month's due date, use next month
-          if (todayMs > dueMs) dueMs = Date.UTC(eatYear, eatMonth + 1, deadlineDay);
+          if (todayMs > dueMs) dueMs = dueIn(eatYear, eatMonth + 1);
 
           const daysLeft = Math.round((dueMs - todayMs) / msPerDay);
           if (!THRESHOLDS.includes(daysLeft)) continue;
@@ -9180,8 +9183,8 @@ export default function App() {
           const triggerId = triggerMap[daysLeft];
           if (cfg.smsTriggers[triggerId] === false) continue;
 
-          const ordinal = (n: number) => n === 1 ? "1st" : n === 2 ? "2nd" : n === 3 ? "3rd" : `${n}th`;
-          const deadlineDayLabel = ordinal(deadlineDay);
+          const ordinal = (n: number) => { const v = n % 100; return `${n}${v >= 11 && v <= 13 ? "th" : n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th"}`; };
+          const deadlineDayLabel = ordinal(new Date(dueMs).getUTCDate()); // actual day this month (e.g. 28th in Feb)
 
           const { smsTemplates: _tpls } = await import("@/lib/sms");
           const firstName = member.name.split(" ")[0];

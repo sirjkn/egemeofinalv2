@@ -890,6 +890,7 @@ export interface Plot {
   min_monthly_payment: number | null;
   paid_amount: number;
   deadline: string | null;
+  assigned_at?: string | null;
   created_at: string;
   shareholder?: any;
   client?: any;
@@ -905,7 +906,22 @@ export interface PlotAssignPayload {
   interest_amount?: number;
   min_monthly_payment?: number;
   deadline?: string;
+  /** Date the plot was assigned (YYYY-MM-DD). Needs plots_assigned_at_migration.sql. */
+  assigned_at?: string;
   price?: number;
+}
+
+/**
+ * Update a plot row; if the optional `assigned_at` column hasn't been added yet
+ * (migration not run), retry without it so saving still works.
+ */
+async function updatePlotRow(plot_id: number, patch: Record<string, any>) {
+  let res = await supabase.from("plots").update(patch).eq("id", plot_id).select().single();
+  if (res.error && "assigned_at" in patch && /assigned_at/i.test(res.error.message)) {
+    const { assigned_at: _skip, ...rest } = patch;
+    res = await supabase.from("plots").update(rest).eq("id", plot_id).select().single();
+  }
+  return res;
 }
 
 export const projectsApi = {
@@ -1074,7 +1090,7 @@ export const plotsApi = {
       .eq("plot_id", plot_id);
     const restoredPaid = (existingPmts ?? []).reduce((sum, r) => sum + Number(r.amount), 0);
 
-    const { data, error } = await supabase.from("plots").update({
+    const { data, error } = await updatePlotRow(plot_id, {
       status: "assigned",
       assigned_to_id: p.assigned_to_id,
       assigned_to_type: p.assigned_to_type,
@@ -1084,20 +1100,21 @@ export const plotsApi = {
       interest_amount: p.interest_amount ?? null,
       min_monthly_payment: p.min_monthly_payment ?? null,
       deadline: p.deadline ?? null,
+      ...(p.assigned_at ? { assigned_at: p.assigned_at } : {}),
       ...(p.price != null ? { price: p.price } : {}),
       paid_amount: restoredPaid,
-    }).eq("id", plot_id).select().single();
+    });
     if (error) throw new Error(error.message);
     return data;
   },
 
   unassign: async (plot_id: number): Promise<Plot> => {
-    const { data, error } = await supabase.from("plots").update({
+    const { data, error } = await updatePlotRow(plot_id, {
       status: "available", assigned_to_id: null, assigned_to_type: null,
       payment_mode: null, loan_duration_months: null,
       interest_type: null, interest_amount: null, min_monthly_payment: null,
-      deadline: null, paid_amount: 0,
-    }).eq("id", plot_id).select().single();
+      deadline: null, paid_amount: 0, assigned_at: null,
+    });
     if (error) throw new Error(error.message);
     return data;
   },
@@ -1115,12 +1132,12 @@ export const plotsApi = {
       if (delErr) throw new Error(delErr.message);
     }
     await supabase.from("plot_co_owners").delete().eq("plot_id", plot_id);
-    const { error } = await supabase.from("plots").update({
+    const { error } = await updatePlotRow(plot_id, {
       status: "available", assigned_to_id: null, assigned_to_type: null,
       payment_mode: null, loan_duration_months: null,
       interest_type: null, interest_amount: null, min_monthly_payment: null,
-      deadline: null, paid_amount: 0,
-    }).eq("id", plot_id);
+      deadline: null, paid_amount: 0, assigned_at: null,
+    });
     if (error) throw new Error(error.message);
     return { payments: (pmts ?? []).length, amount };
   },

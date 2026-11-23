@@ -229,7 +229,7 @@ function ReportViewPage({ type, onBack, ArrearPay }: { type: ReportSub; onBack: 
         // One row per arrear: a monthly repayment not paid on or before its deadline.
         let plotsQuery = supabase
           .from("plots")
-          .select("id,plot_number,project_id,assigned_to_id,assigned_to_type,price,paid_amount,min_monthly_payment,loan_duration_months,deadline,status")
+          .select("*")
           .not("assigned_to_id", "is", null)
           .in("status", ["assigned", "sold"]);
         if (shareholderF) {
