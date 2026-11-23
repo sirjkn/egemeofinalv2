@@ -249,28 +249,28 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
   return (
     <div className="grid grid-cols-2 gap-3">
       <div>
-        <label className="text-xs font-semibold text-gray-600">Assigning Date</label>
+        <label className="text-xs font-semibold text-gray-900">Assigning Date</label>
         <input type="date" value={assignedAt} max={todayKE()} onChange={(e) => changeAssignedAt(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} />
       </div>
       <div>
-        <label className="text-xs font-semibold text-gray-600">Monthly Deadline</label>
+        <label className="text-xs font-semibold text-gray-900">Monthly Deadline</label>
         <select value={deadlineDay} onChange={(e) => { setDeadlineTouched(true); setDeadlineDay(e.target.value ? Number(e.target.value) : ""); }} className={field} style={{ borderColor: "var(--border)" }}>
           {allowEmpty && <option value="">Not set</option>}
           {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{ordinalDay(d)} of every month</option>)}
         </select>
       </div>
       <div>
-        <label className="text-xs font-semibold text-gray-600">Payment Duration (months)</label>
+        <label className="text-xs font-semibold text-gray-900">Payment Duration (months)</label>
         <input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value ? Math.max(1, parseInt(e.target.value) || 1) : "")}
           placeholder="e.g. 12" className={field} style={{ borderColor: "var(--border)" }} />
       </div>
       <div>
-        <label className="text-xs font-semibold text-gray-600">Contract Expiry</label>
-        <div className={`${field} bg-gray-50 text-gray-700`} style={{ borderColor: "var(--border)" }} title="Assigning Date + Payment Duration">
+        <label className="text-xs font-semibold text-gray-900">Contract Expiry</label>
+        <div className={`${field} bg-gray-50 text-gray-900`} style={{ borderColor: "var(--border)" }} title="Assigning Date + Payment Duration">
           {expiry ? fmtDMY(expiry) : <span className="text-gray-400">—</span>}
         </div>
       </div>
-      <p className="col-span-2 text-xs text-gray-400 -mt-1">
+      <p className="col-span-2 text-xs text-gray-900 -mt-1">
         Repayments start the month after the assigning date and are due on this day every month.
         {!deadlineTouched && " The deadline follows the assigning date's day unless you change it."}
         {typeof deadlineDay === "number" && deadlineDay > 28 && ` In shorter months the deadline moves to the month's last day (e.g. 28th Feb${deadlineDay === 31 ? ", 30th Apr" : ""}).`}
@@ -342,20 +342,20 @@ function AssignPlotModal({
         </div>
         <div className="p-6 space-y-4 overflow-y-auto max-h-[70vh]">
           <div>
-            <p className="text-xs font-semibold text-gray-600 mb-2">Select Plot</p>
+            <p className="text-xs font-semibold text-gray-900 mb-2">Select Plot</p>
             <div className="border rounded-xl px-3 py-2.5 text-sm bg-gray-50" style={{ borderColor: "var(--border)" }}>
               {plot.plot_number} · {projectName}
             </div>
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-600">Plot Price (KES)</label>
+            <label className="text-xs font-semibold text-gray-900">Plot Price (KES)</label>
             <input type="number" min={1} value={plotPrice} onChange={(e) => setPlotPrice(e.target.value)}
               className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
               style={{ borderColor: "var(--border)" }} />
-            <p className="text-xs text-gray-400 mt-0.5">Updates the price everywhere this plot is displayed.</p>
+            <p className="text-xs text-gray-900 mt-0.5">Updates the price everywhere this plot is displayed.</p>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-600 mb-2">Assign To</p>
+            <p className="text-xs font-semibold text-gray-900 mb-2">Assign To</p>
             <div className="grid grid-cols-2 gap-2">
               {(["shareholder", "client"] as const).map((t) => (
                 <button key={t} onClick={() => { setAssignTo(t); setMemberId(""); }}
@@ -367,7 +367,7 @@ function AssignPlotModal({
             </div>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-600 mb-2">Select Member</p>
+            <p className="text-xs font-semibold text-gray-900 mb-2">Select Member</p>
             <select value={memberId} onChange={(e) => setMemberId(e.target.value ? parseInt(e.target.value) : "")}
               className="w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
               style={{ borderColor: "var(--border)" }}>
@@ -380,7 +380,7 @@ function AssignPlotModal({
             </select>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-600 mb-2">Payment Mode</p>
+            <p className="text-xs font-semibold text-gray-900 mb-2">Payment Mode</p>
             <div className="grid grid-cols-2 gap-2">
               {(["cash", "installment"] as const).map((m) => (
                 <button key={m} onClick={() => setPayMode(m)}
@@ -394,7 +394,7 @@ function AssignPlotModal({
           {payMode === "installment" && (
             <>
               <div>
-                <p className="text-xs font-semibold text-gray-600 mb-2">Interest Type</p>
+                <p className="text-xs font-semibold text-gray-900 mb-2">Interest Type</p>
                 <div className="grid grid-cols-2 gap-2">
                   {(["fixed", "percentage"] as const).map((t) => (
                     <button key={t} onClick={() => setIntType(t)}
@@ -406,7 +406,7 @@ function AssignPlotModal({
                 </div>
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-600">
+                <label className="text-xs font-semibold text-gray-900">
                   {intType === "fixed" ? "Interest Amount (KES)" : "Interest Rate (%)"}
                 </label>
                 <input type="number" value={intAmount} onChange={(e) => setIntAmount(e.target.value)}
@@ -417,12 +417,12 @@ function AssignPlotModal({
             </>
           )}
           <div>
-            <label className="text-xs font-semibold text-gray-600">Minimum Payment Per Month (KES) <span className="text-red-500">*</span></label>
+            <label className="text-xs font-semibold text-gray-900">Minimum Payment Per Month (KES) <span className="text-red-500">*</span></label>
             <input type="number" min={1} value={minMonthlyPayment} onChange={(e) => setMinMonthlyPayment(e.target.value)}
               placeholder="e.g. 10000"
               className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none"
               style={{ borderColor: "var(--border)" }} />
-            <p className="text-xs text-gray-400 mt-0.5">The member must pay this amount or more before the monthly deadline.</p>
+            <p className="text-xs text-gray-900 mt-0.5">The member must pay this amount or more before the monthly deadline.</p>
           </div>
           <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
             deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} />
@@ -1581,19 +1581,19 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={16} /></button>
         </div>
         <div className="p-6 space-y-4 overflow-y-auto">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Plot</p>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-gray-900">Plot</p>
           <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2"><label className="text-xs font-semibold text-gray-600">Plot Name / Number</label>
+            <div className="col-span-2"><label className="text-xs font-semibold text-gray-900">Plot Name / Number</label>
               <input value={plotName} onChange={(e) => setPlotName(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
-            <div><label className="text-xs font-semibold text-gray-600">Price (KES)</label>
+            <div><label className="text-xs font-semibold text-gray-900">Price (KES)</label>
               <input type="number" min={1} value={plotPrice} onChange={(e) => setPlotPrice(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
-            <div><label className="text-xs font-semibold text-gray-600">Size (Acres)</label>
+            <div><label className="text-xs font-semibold text-gray-900">Size (Acres)</label>
               <input type="number" value={size} onChange={(e) => setSize(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
           </div>
 
           {isAssigned && (
             <>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 pt-2">Assignment</p>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-900 pt-2">Assignment</p>
               <div className="grid grid-cols-2 gap-2">
                 {(["shareholder", "client"] as const).map((t) => (
                   <button key={t} type="button" onClick={() => { setAssignTo(t); setMemberId(""); }}
@@ -1620,11 +1620,11 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
                       {t === "fixed" ? "Fixed Amount (KES)" : "Percentage (%)"}
                     </button>
                   ))}
-                  <div className="col-span-2"><label className="text-xs font-semibold text-gray-600">{intType === "fixed" ? "Interest Amount (KES)" : "Interest Rate (%)"}</label>
+                  <div className="col-span-2"><label className="text-xs font-semibold text-gray-900">{intType === "fixed" ? "Interest Amount (KES)" : "Interest Rate (%)"}</label>
                     <input type="number" value={intAmount} onChange={(e) => setIntAmount(e.target.value)} className={field} style={{ borderColor: "var(--border)" }} /></div>
                 </div>
               )}
-              <div><label className="text-xs font-semibold text-gray-600">Minimum Payment Per Month (KES) {hasBalance && <span className="text-red-500">*</span>}</label>
+              <div><label className="text-xs font-semibold text-gray-900">Minimum Payment Per Month (KES) {hasBalance && <span className="text-red-500">*</span>}</label>
                 <input type="number" min={1} value={minMonthly} onChange={(e) => setMinMonthly(e.target.value)} placeholder="e.g. 10000" className={field} style={{ borderColor: "var(--border)" }} /></div>
               <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
                 deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} allowEmpty />
@@ -3699,25 +3699,69 @@ function ProjectDetailView({
           </div>
         )}
 
-        {/* Plot Allocation accordion */}
+        {/* Plots accordion (includes plot allocation progress) */}
+        {(() => {
+          const visiblePlots = isAdmin ? plots : plots.filter((p) => p.status !== "assigned");
+          return (
         <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "var(--border)" }}>
-          <button onClick={() => toggle("allocation")} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
+          <button onClick={() => toggle("plots")} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "#eef2ff" }}>
               <MapPin size={14} color="#6366f1" />
             </div>
-            <span className="font-bold text-sm flex-1 text-left" style={{ color: "#1a202c" }}>Plot Allocation</span>
-            <span className="text-xs text-gray-400">{allocated.length} allocated · {available.length} available</span>
-            <ChevronDown size={15} className={`text-gray-400 transition-transform flex-shrink-0 ${open.allocation ? "rotate-180" : ""}`} />
+            <span className="font-bold text-sm flex-1 text-left" style={{ color: "#1a202c" }}>
+              {isAdmin ? `Plots (${plots.length})` : `Available Plots (${visiblePlots.length})`}
+            </span>
+            {isAdmin && <span className="text-xs mr-1">
+              <span className="text-gray-400">{available.length} available</span>
+              <span className="mx-1 text-gray-200">·</span>
+              <span className="text-indigo-500">{allocated.length} allocated</span>
+              <span className="mx-1 text-gray-200">·</span>
+              <span className="font-semibold text-indigo-600">{allocPct}%</span>
+            </span>}
+            <ChevronDown size={15} className={`text-gray-400 transition-transform flex-shrink-0 ${open.plots ? "rotate-180" : ""}`} />
           </button>
-          {open.allocation && (
-            <div className="px-4 pb-4 border-t" style={{ borderColor: "var(--border)" }}>
-              <div className="h-2.5 rounded-full overflow-hidden mt-3 mb-1" style={{ background: "#e2e8f0" }}>
-                <div className="h-full rounded-full transition-all" style={{ width: `${allocPct}%`, background: "#6366f1" }} />
+          {open.plots && (
+            <div className="border-t p-4" style={{ borderColor: "var(--border)" }}>
+              {/* Allocation progress (formerly the Plot Allocation card) */}
+              <div className="mb-4">
+                <div className="h-2.5 rounded-full overflow-hidden mb-1" style={{ background: "#e2e8f0" }}>
+                  <div className="h-full rounded-full transition-all" style={{ width: `${allocPct}%`, background: "#6366f1" }} />
+                </div>
+                <p className="text-xs text-gray-500">{allocPct}% of plots allocated ({allocated.length}/{plots.length})</p>
               </div>
-              <p className="text-xs text-gray-500">{allocPct}% of plots allocated ({allocated.length}/{plots.length})</p>
+              {loadingPlots ? (
+                <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin text-gray-300" /></div>
+              ) : visiblePlots.length === 0 ? (
+                <p className="text-xs text-gray-400">{isAdmin ? "No plots found." : "No available plots at this time."}</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {visiblePlots.map((p) => (
+                    <PlotCard
+                      key={p.id}
+                      plot={p}
+                      projectName={project.project_name}
+                      isAdmin={isAdmin}
+                      canViewDocs={p.assigned_to_id === currentMemberId && p.assigned_to_type === currentMemberType}
+                      shareholders={shareholders as any}
+                      clients={clients as any}
+                      coOwners={coOwnersMap[p.id] ?? []}
+                      highlight={flashPlotId === p.id}
+                      cardRef={(el) => { plotCardRefs.current[p.id] = el; }}
+                      onChanged={load}
+                      onDelete={async () => {
+                        logActivity({ category: "plot", action: "delete", description: `Plot ${p.plot_number} deleted from project "${project.project_name}"`, meta: { plot_id: p.id } });
+                        await plotsApi.remove(p.id);
+                        await load();
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
+          );
+        })()}
 
         {/* Debt Management accordion — admin only */}
         {isAdmin && (
@@ -3912,60 +3956,6 @@ function ProjectDetailView({
           )}
         </div>}
 
-        {/* Plots accordion */}
-        {(() => {
-          const visiblePlots = isAdmin ? plots : plots.filter((p) => p.status !== "assigned");
-          return (
-        <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "var(--border)" }}>
-          <button onClick={() => toggle("plots")} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "#f8fafc" }}>
-              <FolderOpen size={14} color="#475569" />
-            </div>
-            <span className="font-bold text-sm flex-1 text-left" style={{ color: "#1a202c" }}>
-              {isAdmin ? `Plots (${plots.length})` : `Available Plots (${visiblePlots.length})`}
-            </span>
-            {isAdmin && <span className="text-xs mr-1">
-              <span className="text-gray-400">{available.length} available</span>
-              <span className="mx-1 text-gray-200">·</span>
-              <span className="text-indigo-500">{allocated.length} allocated</span>
-            </span>}
-            <ChevronDown size={15} className={`text-gray-400 transition-transform flex-shrink-0 ${open.plots ? "rotate-180" : ""}`} />
-          </button>
-          {open.plots && (
-            <div className="border-t p-4" style={{ borderColor: "var(--border)" }}>
-              {loadingPlots ? (
-                <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin text-gray-300" /></div>
-              ) : visiblePlots.length === 0 ? (
-                <p className="text-xs text-gray-400">{isAdmin ? "No plots found." : "No available plots at this time."}</p>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {visiblePlots.map((p) => (
-                    <PlotCard
-                      key={p.id}
-                      plot={p}
-                      projectName={project.project_name}
-                      isAdmin={isAdmin}
-                      canViewDocs={p.assigned_to_id === currentMemberId && p.assigned_to_type === currentMemberType}
-                      shareholders={shareholders as any}
-                      clients={clients as any}
-                      coOwners={coOwnersMap[p.id] ?? []}
-                      highlight={flashPlotId === p.id}
-                      cardRef={(el) => { plotCardRefs.current[p.id] = el; }}
-                      onChanged={load}
-                      onDelete={async () => {
-                        logActivity({ category: "plot", action: "delete", description: `Plot ${p.plot_number} deleted from project "${project.project_name}"`, meta: { plot_id: p.id } });
-                        await plotsApi.remove(p.id);
-                        await load();
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-          );
-        })()}
         {/* Project Documents accordion — admin only */}
         {isAdmin && <div className="bg-white rounded-xl border overflow-hidden" style={{ borderColor: "var(--border)" }}>
           <button onClick={() => toggle("documents")} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
