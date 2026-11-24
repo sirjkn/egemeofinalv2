@@ -1451,7 +1451,7 @@ function PlotCsvUploadModal({ plot, memberName, onClose, onDone }: {
   );
 }
 
-type PaymentExtras = { paidBy?: string; comment?: string; paymentDate?: string };
+type PaymentExtras = { paidBy?: string; comment?: string; paymentDate?: string; /** amount entered in the modal when it is editable */ amount?: number };
 
 function AllocatedPlotsAccordion({ memberId, memberType, memberName, memberPhone }: { memberId: number; memberType: "shareholder" | "client"; memberName: string; memberPhone?: string }) {
   const navigate = useNavigate();
@@ -4326,29 +4326,16 @@ function MemberDashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
                 </div>
               );
             })()}
-            {(isSH || isCL) && (
-              <button onClick={() => setShowMonthlyDues(true)}
-                className="rounded-xl p-4 text-left hover:brightness-105 transition-all active:scale-[0.98]"
-                style={{ background: monthlyPlotDues.length > 0 && monthlyPlotDues.every((row) => row.fullyPaid) ? "#059669" : "#dc2626" }}>
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><Calendar size={17} color="white" /></div>
-                <div className="text-xl font-bold text-white">
-                  {monthlyPlotDues.length > 0 && monthlyPlotDues.every((row) => row.fullyPaid)
-                    ? "Fully Paid"
-                    : fmtKESFull(monthlyPlotDues.reduce((sum, row) => sum + row.due, 0))}
-                </div>
-                <div className="text-xs font-semibold text-white">Total Monthly Due</div>
-                <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>Tap to view individual plots</div>
-              </button>
-            )}
-            {(isSH || isCL) && memberArrears.length > 0 && (
+            {/* Arrears card — shareholders and clients with plots (replaces "Total Monthly Due"). */}
+            {(isSH || isCL) && (memberArrears.length > 0 || monthlyPlotDues.length > 0) && (
               <button onClick={() => { setArrearsBlockNotice(false); setShowArrears(true); }}
                 className="rounded-xl p-4 text-left hover:brightness-105 transition-all active:scale-[0.98]"
                 style={{ background: unpaidArrears.length > 0 ? "#9f1239" : "#059669" }}>
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: "rgba(255,255,255,0.2)" }}><AlertTriangle size={17} color="white" /></div>
-                <div className="text-xl font-bold text-white">{unpaidArrears.length > 0 ? fmtKESFull(unpaidArrearsAmount) : "Cleared"}</div>
+                <div className="text-xl font-bold text-white">{unpaidArrears.length > 0 ? fmtKESFull(unpaidArrearsAmount) : memberArrears.length > 0 ? "Cleared" : "No Arrears"}</div>
                 <div className="text-xs font-semibold text-white">Arrears</div>
                 <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>
-                  {unpaidArrears.length > 0 ? `${unpaidArrears.length} unpaid month${unpaidArrears.length !== 1 ? "s" : ""} · Tap to pay` : "All arrears paid · Tap to view"}
+                  {unpaidArrears.length > 0 ? `${unpaidArrears.length} unpaid month${unpaidArrears.length !== 1 ? "s" : ""} · Tap to pay` : memberArrears.length > 0 ? "All arrears paid · Tap to view" : "You're up to date"}
                 </div>
               </button>
             )}
@@ -6903,6 +6890,8 @@ interface PaymentModalProps {
   memberName?: string;
   memberPhone?: string;
   accountRef?: string;
+  /** Let the payer change the amount (between 1 and `max`); the chosen amount comes back in extras.amount. */
+  editableAmount?: { max: number; hint?: string };
   onComplete: (method: PayMethod, reference?: string, viaStk?: boolean, phone?: string, extras?: PaymentExtras) => Promise<void>;
   onClose: () => void;
 }
@@ -6920,9 +6909,13 @@ const METHOD_META: Record<PayMethod, { label: string; icon: string; color: strin
 // manual method) for one arrear, then records it as a normal plot payment.
 function ArrearPayModal({ request, onClose, onPaid }: { request: ArrearPayRequest; onClose: () => void; onPaid: () => void }) {
   const { plot, member, monthLabel } = request;
-  const amount = Math.min(request.amount, Math.max(0, plot.price - plot.paid_amount));
+  const balance = Math.max(0, plot.price - plot.paid_amount);
+  const defaultAmount = Math.min(request.amount, balance);
 
   const handleComplete = async (method: PayMethod, ref?: string, _viaStk?: boolean, phone?: string, extras?: PaymentExtras) => {
+    // The payer may pay part of the arrear, or more (up to the plot balance);
+    // payments always clear the oldest arrears first.
+    const amount = Math.min(extras?.amount ?? defaultAmount, balance);
     if (amount <= 0) { onClose(); return; }
     const today = extras?.paymentDate || new Date().toISOString().slice(0, 10);
     const payerName = extras?.paidBy || member.name;
@@ -6958,7 +6951,8 @@ function ArrearPayModal({ request, onClose, onPaid }: { request: ArrearPayReques
 
   return (
     <PaymentModal
-      amount={amount}
+      amount={defaultAmount}
+      editableAmount={{ max: balance, hint: `Arrear due: ${fmtKESFull(defaultAmount)}. You can pay part of it or change the amount; payments clear the oldest arrears first.` }}
       description={`Arrears ${monthLabel} · Plot ${plot.plot_number}`}
       memberName={member.name}
       memberPhone={member.phone}
@@ -6969,7 +6963,18 @@ function ArrearPayModal({ request, onClose, onPaid }: { request: ArrearPayReques
   );
 }
 
-function PaymentModal({ amount, description, memberName, memberPhone, accountRef, onComplete, onClose }: PaymentModalProps) {
+function PaymentModal({ amount: defaultAmount, description, memberName, memberPhone, accountRef, editableAmount, onComplete: onCompleteRaw, onClose }: PaymentModalProps) {
+  const [amountInput, setAmountInput] = useState(String(Math.round(defaultAmount * 100) / 100));
+  const amount = editableAmount ? Math.round((parseFloat(amountInput) || 0) * 100) / 100 : defaultAmount;
+  const amountError = !editableAmount ? ""
+    : !(amount >= 1) ? "Enter an amount of at least Ksh 1"
+    : amount > editableAmount.max + 0.005 ? `Maximum is ${fmtKESFull(editableAmount.max)}`
+    : "";
+  // The amount is fixed once a payment starts; keep it for the deferred STK completion.
+  const amountRef = useRef(amount);
+  amountRef.current = amount;
+  const onComplete: PaymentModalProps["onComplete"] = (method, ref, viaStk, phone, extras) =>
+    onCompleteRaw(method, ref, viaStk, phone, editableAmount ? { ...(extras ?? {}), amount: amountRef.current } : extras);
   const profile = useProfile();
   const isAdmin = profile?.role === "admin";
   const [availableMethods, setAvailableMethods] = useState<PayMethod[]>(() => {
@@ -7015,6 +7020,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
 
   // ── STK Push ────────────────────────────────────────────────────────────────
   const sendStk = async () => {
+    if (amountError) { setErr(amountError); return; }
     if (!stkPhone.trim()) { setErr("Enter a phone number"); return; }
     setErr(""); setStkState("pushing");
     try {
@@ -7130,6 +7136,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
   };
 
   const handlePay = async () => {
+    if (amountError) { setErr(amountError); return; }
     setErr(""); setProcessing(true);
     try {
       let ref: string | undefined;
@@ -7141,6 +7148,7 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
   };
 
   const handleManualPay = async () => {
+    if (amountError) { setErr(amountError); return; }
     if (!manualRef.trim()) { setErr("Enter M-Pesa transaction code"); return; }
     setErr(""); setProcessing(true);
     try {
@@ -7169,8 +7177,24 @@ function PaymentModal({ amount, description, memberName, memberPhone, accountRef
           {/* Amount */}
           <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount</span>
-            <span className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(amount)}</span>
+            {editableAmount ? (
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-bold text-gray-500">Ksh</span>
+                <input type="number" inputMode="decimal" min={1} max={editableAmount.max} value={amountInput}
+                  disabled={processing || isStkBusy}
+                  onChange={(e) => { setAmountInput(e.target.value); setErr(""); }}
+                  className="w-32 text-right text-xl font-bold border rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white disabled:bg-gray-100"
+                  style={{ color: "#1a202c", borderColor: amountError ? "#ef4444" : "var(--border)" }} />
+              </div>
+            ) : (
+              <span className="text-xl font-bold" style={{ color: "#1a202c" }}>{fmtKESFull(amount)}</span>
+            )}
           </div>
+          {editableAmount && (
+            <p className={`-mt-2 text-xs ${amountError ? "text-red-600 font-semibold" : "text-gray-500"}`}>
+              {amountError || editableAmount.hint || "You can change the amount to pay part of it."}
+            </p>
+          )}
 
           {isAdmin && (
             <div>
