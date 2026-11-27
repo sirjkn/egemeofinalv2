@@ -25,6 +25,8 @@ export interface ArrearPlot {
   deadline?: string | null;
   /** Date the plot was assigned, when recorded. */
   assigned_at?: string | null;
+  /** Contract end date, when recorded. */
+  contract_expiry?: string | null;
 }
 
 export interface ArrearPayment {
@@ -205,6 +207,8 @@ export function computePlotArrears(
  */
 export function contractExpiry(plot: ArrearPlot, payments: ArrearPayment[]): string {
   const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const saved = String(plot.contract_expiry ?? "").slice(0, 10);
+  if (isDate(saved)) return saved;
   let start = String(plot.assigned_at ?? "").slice(0, 10);
   if (!isDate(start)) {
     const candidates = payments

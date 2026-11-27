@@ -228,14 +228,16 @@ export function addMonthsISO(date: string, months: number): string {
 }
 const fmtDMY = (iso: string) => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "";
 
-function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDay, duration, setDuration, allowEmpty = false }: {
+function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDay, duration, setDuration, expiryOverride, setExpiryOverride, allowEmpty = false }: {
   assignedAt: string; setAssignedAt: (v: string) => void;
+  /** Contract expiry typed by the user (any day); "" = assigning date + duration. */
+  expiryOverride: string; setExpiryOverride: (v: string) => void;
   deadlineDay: number | ""; setDeadlineDay: (v: number | "") => void;
   duration: number | ""; setDuration: (v: number | "") => void;
   allowEmpty?: boolean;
 }) {
   const field = "w-full mt-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none";
-  const expiry = assignedAt && duration ? addMonthsISO(assignedAt, Number(duration)) : "";
+  const expiry = expiryOverride || (assignedAt && duration ? addMonthsISO(assignedAt, Number(duration)) : "");
   // The monthly deadline follows the assigning date's day until the user picks a
   // different day. An existing deadline that already differs counts as picked.
   const dayOf = (iso: string) => (iso ? Number(iso.slice(8, 10)) : "");
@@ -244,6 +246,7 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
   );
   const changeAssignedAt = (v: string) => {
     setAssignedAt(v);
+    setExpiryOverride("");
     if (!deadlineTouched && v) setDeadlineDay(dayOf(v));
   };
   return (
@@ -261,7 +264,7 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
       </div>
       <div>
         <label className="text-xs font-semibold text-gray-900">Payment Duration (months)</label>
-        <input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value ? Math.max(1, parseInt(e.target.value) || 1) : "")}
+        <input type="number" min={1} value={duration} onChange={(e) => { setExpiryOverride(""); setDuration(e.target.value ? Math.max(1, parseInt(e.target.value) || 1) : ""); }}
           placeholder="e.g. 12" className={field} style={{ borderColor: "var(--border)" }} />
       </div>
       <div>
@@ -272,7 +275,8 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
           title={assignedAt ? "Assigning Date + Payment Duration" : "Set the assigning date first"}
           onChange={(e) => {
             const v = e.target.value;
-            if (!assignedAt || !/^\d{4}-\d{2}-\d{2}$/.test(v)) { if (!v) setDuration(""); return; }
+            if (!assignedAt || !/^\d{4}-\d{2}-\d{2}$/.test(v)) { if (!v) { setExpiryOverride(""); setDuration(""); } return; }
+            setExpiryOverride(v);
             const [y1, m1, d1] = assignedAt.split("-").map(Number);
             const [y2, m2, d2] = v.split("-").map(Number);
             const months = Math.round((y2 - y1) * 12 + (m2 - m1) + (d2 - d1) / 30);
@@ -282,7 +286,7 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
       </div>
       <p className="col-span-2 text-xs text-gray-900 -mt-1">
         Repayments start the month after the assigning date and are due on this day every month.
-        {" "}Change the duration or the contract expiry. The other updates automatically, in whole months.
+        {" "}Change the duration or the contract expiry. The other updates automatically (duration in whole months).
         {!deadlineTouched && " The deadline follows the assigning date's day unless you change it."}
         {typeof deadlineDay === "number" && deadlineDay > 28 && ` In shorter months the deadline moves to the month's last day (e.g. 28th Feb${deadlineDay === 31 ? ", 30th Apr" : ""}).`}
       </p>
@@ -309,6 +313,8 @@ function AssignPlotModal({
   const [plotPrice, setPlotPrice] = useState(String(plot.price ?? 0));
   const todayStr = new Date().toISOString().split("T")[0];
   const [assignedAt, setAssignedAt] = useState(plot.assigned_at ?? todayKE());
+  const [expiryOverride, setExpiryOverride] = useState(String(plot.contract_expiry ?? "").slice(0, 10));
+  const expiryValue = expiryOverride || (assignedAt && duration ? addMonthsISO(assignedAt, Number(duration)) : "");
   const [deadlineDay, setDeadlineDay] = useState<number | "">(plot.deadline ? Number(plot.deadline.slice(8, 10)) : Number(todayKE().slice(8, 10)));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -334,6 +340,7 @@ function AssignPlotModal({
         min_monthly_payment: minimum,
         deadline: deadlineDateFor(Number(deadlineDay), assignedAt || todayKE()),
         assigned_at: assignedAt || todayKE(),
+        contract_expiry: expiryValue,
         price,
       });
       onClose();
@@ -436,7 +443,8 @@ function AssignPlotModal({
             <p className="text-xs text-gray-900 mt-0.5">The member must pay this amount or more before the monthly deadline.</p>
           </div>
           <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
-            deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} />
+            deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration}
+            expiryOverride={expiryOverride} setExpiryOverride={setExpiryOverride} />
           {err && <p className="text-xs text-red-500">{err}</p>}
         </div>
         <div className="px-6 py-4 border-t flex gap-2" style={{ borderColor: "var(--border)" }}>
@@ -1522,6 +1530,8 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
   const [minMonthly, setMinMonthly] = useState(plot.min_monthly_payment != null ? String(plot.min_monthly_payment) : "");
   const [deadlineDay, setDeadlineDay] = useState<number | "">(plot.deadline ? Number(plot.deadline.slice(8, 10)) : ""); // stays empty if never set
   const [assignedAt, setAssignedAt] = useState(String(plot.assigned_at ?? "").slice(0, 10));
+  const [expiryOverride, setExpiryOverride] = useState(String(plot.contract_expiry ?? "").slice(0, 10));
+  const expiryValue = expiryOverride || (assignedAt && duration ? addMonthsISO(assignedAt, Number(duration)) : "");
   const termsEstimated = isAssigned && (!plot.assigned_at || !plot.loan_duration_months);
   // No saved assigning date (older plots): use the earlier of the first payment
   // date and the deadline — the same month the arrears schedule already assumes.
@@ -1570,7 +1580,7 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
           interest_amount: payMode === "installment" && intAmount ? parseFloat(intAmount) : undefined,
           min_monthly_payment: Number.isFinite(minimum) && minimum > 0 ? minimum : undefined,
           deadline: deadlineDay ? deadlineDateFor(Number(deadlineDay), assignedAt || plot.deadline || todayKE()) : undefined,
-          assigned_at: assignedAt || undefined, price,
+          assigned_at: assignedAt || undefined, contract_expiry: expiryValue, price,
         });
         // New owner? Send the plot-assigned SMS.
         if (memberId !== plot.assigned_to_id || assignTo !== plot.assigned_to_type) {
@@ -1662,7 +1672,8 @@ function EditPlotFullModal({ plot, projectName, shareholders, clients, onClose, 
               <div><label className="text-xs font-semibold text-gray-900">Minimum Payment Per Month (KES) {hasBalance && <span className="text-red-500">*</span>}</label>
                 <input type="number" min={1} value={minMonthly} onChange={(e) => setMinMonthly(e.target.value)} placeholder="e.g. 10000" className={field} style={{ borderColor: "var(--border)" }} /></div>
               <PlotTermsFields assignedAt={assignedAt} setAssignedAt={setAssignedAt}
-                deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration} allowEmpty />
+                deadlineDay={deadlineDay} setDeadlineDay={setDeadlineDay} duration={duration} setDuration={setDuration}
+                expiryOverride={expiryOverride} setExpiryOverride={setExpiryOverride} allowEmpty />
               {termsEstimated && (
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   Assigning date / duration weren't saved for this plot, so they've been filled in from its payments and minimum. Check them and Save Changes to keep them.
@@ -1857,8 +1868,8 @@ export function PlotCard({
               )}
               {plot.deadline && <span className="font-semibold text-orange-600">Due {ordinalDay(Number(plot.deadline.split("-")[2] ?? 0))} monthly</span>}
               <span className="font-semibold text-gray-500">{plot.payment_mode === "installment" ? "Instalments" : "Cash"}{plot.loan_duration_months ? ` · ${plot.loan_duration_months} months` : ""}</span>
-              {plot.assigned_at && plot.loan_duration_months ? (
-                <span className="font-semibold text-gray-500">Expires {fmtDMY(addMonthsISO(String(plot.assigned_at).slice(0, 10), Number(plot.loan_duration_months)))}</span>
+              {plot.contract_expiry || (plot.assigned_at && plot.loan_duration_months) ? (
+                <span className="font-semibold text-gray-500">Expires {fmtDMY(String(plot.contract_expiry ?? "").slice(0, 10) || addMonthsISO(String(plot.assigned_at).slice(0, 10), Number(plot.loan_duration_months)))}</span>
               ) : null}
             </div>
             <div className="h-1 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>

@@ -891,6 +891,7 @@ export interface Plot {
   paid_amount: number;
   deadline: string | null;
   assigned_at?: string | null;
+  contract_expiry?: string | null;
   created_at: string;
   shareholder?: any;
   client?: any;
@@ -908,6 +909,8 @@ export interface PlotAssignPayload {
   deadline?: string;
   /** Date the plot was assigned (YYYY-MM-DD). Needs plots_assigned_at_migration.sql. */
   assigned_at?: string;
+  /** Contract end date (YYYY-MM-DD). Needs plots_assigned_at_migration.sql. */
+  contract_expiry?: string;
   price?: number;
 }
 
@@ -916,10 +919,16 @@ export interface PlotAssignPayload {
  * (migration not run), retry without it so saving still works.
  */
 async function updatePlotRow(plot_id: number, patch: Record<string, any>) {
-  let res = await supabase.from("plots").update(patch).eq("id", plot_id).select().single();
-  if (res.error && "assigned_at" in patch && /assigned_at/i.test(res.error.message)) {
-    const { assigned_at: _skip, ...rest } = patch;
-    res = await supabase.from("plots").update(rest).eq("id", plot_id).select().single();
+  // Optional columns added by plots_assigned_at_migration.sql; drop any the
+  // database doesn't have yet and retry.
+  const optional = ["assigned_at", "contract_expiry"];
+  const body: Record<string, any> = { ...patch };
+  let res = await supabase.from("plots").update(body).eq("id", plot_id).select().single();
+  for (let tries = 0; tries < optional.length && res.error; tries++) {
+    const missing = optional.filter((c) => c in body && new RegExp(c, "i").test(res.error!.message));
+    if (!missing.length) break;
+    for (const c of missing) delete body[c];
+    res = await supabase.from("plots").update(body).eq("id", plot_id).select().single();
   }
   return res;
 }
@@ -1101,6 +1110,7 @@ export const plotsApi = {
       min_monthly_payment: p.min_monthly_payment ?? null,
       deadline: p.deadline ?? null,
       ...(p.assigned_at ? { assigned_at: p.assigned_at } : {}),
+      ...(p.contract_expiry !== undefined ? { contract_expiry: p.contract_expiry || null } : {}),
       ...(p.price != null ? { price: p.price } : {}),
       paid_amount: restoredPaid,
     });
@@ -1113,7 +1123,7 @@ export const plotsApi = {
       status: "available", assigned_to_id: null, assigned_to_type: null,
       payment_mode: null, loan_duration_months: null,
       interest_type: null, interest_amount: null, min_monthly_payment: null,
-      deadline: null, paid_amount: 0, assigned_at: null,
+      deadline: null, paid_amount: 0, assigned_at: null, contract_expiry: null,
     });
     if (error) throw new Error(error.message);
     return data;
@@ -1136,7 +1146,7 @@ export const plotsApi = {
       status: "available", assigned_to_id: null, assigned_to_type: null,
       payment_mode: null, loan_duration_months: null,
       interest_type: null, interest_amount: null, min_monthly_payment: null,
-      deadline: null, paid_amount: 0, assigned_at: null,
+      deadline: null, paid_amount: 0, assigned_at: null, contract_expiry: null,
     });
     if (error) throw new Error(error.message);
     return { payments: (pmts ?? []).length, amount };
