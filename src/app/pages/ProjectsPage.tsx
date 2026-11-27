@@ -266,12 +266,23 @@ function PlotTermsFields({ assignedAt, setAssignedAt, deadlineDay, setDeadlineDa
       </div>
       <div>
         <label className="text-xs font-semibold text-gray-900">Contract Expiry</label>
-        <div className={`${field} bg-gray-50 text-gray-900`} style={{ borderColor: "var(--border)" }} title="Assigning Date + Payment Duration">
-          {expiry ? fmtDMY(expiry) : <span className="text-gray-400">—</span>}
-        </div>
+        {/* Editable: picking an expiry sets the duration to the whole months between
+            the assigning date and the expiry (and changing the duration moves the expiry). */}
+        <input type="date" value={expiry} disabled={!assignedAt} min={assignedAt || undefined}
+          title={assignedAt ? "Assigning Date + Payment Duration" : "Set the assigning date first"}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!assignedAt || !/^\d{4}-\d{2}-\d{2}$/.test(v)) { if (!v) setDuration(""); return; }
+            const [y1, m1, d1] = assignedAt.split("-").map(Number);
+            const [y2, m2, d2] = v.split("-").map(Number);
+            const months = Math.round((y2 - y1) * 12 + (m2 - m1) + (d2 - d1) / 30);
+            setDuration(Math.max(1, months));
+          }}
+          className={`${field} text-gray-900 disabled:bg-gray-50 disabled:text-gray-400`} style={{ borderColor: "var(--border)" }} />
       </div>
       <p className="col-span-2 text-xs text-gray-900 -mt-1">
         Repayments start the month after the assigning date and are due on this day every month.
+        {" "}Change the duration or the contract expiry. The other updates automatically, in whole months.
         {!deadlineTouched && " The deadline follows the assigning date's day unless you change it."}
         {typeof deadlineDay === "number" && deadlineDay > 28 && ` In shorter months the deadline moves to the month's last day (e.g. 28th Feb${deadlineDay === 31 ? ", 30th Apr" : ""}).`}
       </p>
